@@ -1,0 +1,58 @@
+[
+  {
+    "id": "n_1",
+    "tone": "ok",
+    "title": "sales_2024.csv está listo",
+    "body": "Procesamos tu archivo (12.480 filas). Ya podés empezar a hacer preguntas.",
+    "time": "hace 12 min",
+    "read": false,
+    "action": {
+      "label": "Preguntar ahora",
+      "href": "/app"
+    }
+  },
+  {
+    "id": "n_2",
+    "tone": "warn",
+    "title": "Estás cerca del límite de tu plan",
+    "body": "Usaste 200 de las 250 consultas de tu plan este mes. Activá las consultas adicionales para no quedarte sin respuestas.",
+    "time": "hace 2 h",
+    "read": false,
+    "action": {
+      "label": "Ver mi plan",
+      "href": "/cuenta?tab=billing"
+    }
+  },
+  {
+    "id": "n_3",
+    "tone": "ok",
+    "title": "Tu plan Pro está activo",
+    "body": "Ya tenés datasets ilimitados, 250 consultas por mes y exportación a PNG y PDF.",
+    "time": "ayer",
+    "read": true,
+    "action": {
+      "label": "Subir un archivo",
+      "href": "/ingesta"
+    }
+  },
+  {
+    "id": "n_4",
+    "tone": "info",
+    "title": "Novedad: mapa de calor",
+    "body": "Agregamos el mapa de calor a los tipos de visualización disponibles.",
+    "time": "hace 3 días",
+    "read": true
+  },
+  {
+    "id": "n_5",
+    "tone": "err",
+    "title": "No pudimos procesar report.pdf",
+    "body": "El archivo no tenía tablas reconocibles. Probá con un archivo CSV o Excel.",
+    "time": "hace 4 días",
+    "read": true,
+    "action": {
+      "label": "Reintentar subida",
+      "href": "/ingesta"
+    }
+  }
+]

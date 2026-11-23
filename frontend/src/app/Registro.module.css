@@ -1,0 +1,194 @@
+/* Registro-specific styles. Shared shell in auth.module.css; code entry in CodeInput. */
+
+/* Step indicator */
+.stepsInd {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 18px;
+}
+.stepDot {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--glass-border);
+  flex: 1;
+  transition: background var(--dur) var(--ease);
+}
+.stepDot.done {
+  background: var(--accent);
+}
+
+/* Password strength meter */
+.pwMeter {
+  display: flex;
+  gap: 5px;
+  margin-top: 8px;
+}
+.pwSeg {
+  height: 3px;
+  border-radius: 999px;
+  flex: 1;
+  background: var(--glass-border);
+  transition: background var(--dur) var(--ease);
+}
+
+/* Password requirements checklist */
+.pwReqs {
+  display: flex;
+  flex-flow: row wrap;
+  gap: 4px 14px;
+  margin: 9px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.pwReq {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--fg-4);
+  transition: color var(--dur) var(--ease);
+}
+.pwReq.met {
+  color: var(--fg-2);
+}
+
+/* Plan selection (radio-style compact cards) */
+.planPick {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 14px;
+  margin-top: 22px;
+}
+.pp {
+  padding: 20px;
+  border-radius: var(--r-lg);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  text-align: left;
+  font-family: var(--font-sans);
+  color: inherit;
+}
+.pp:hover {
+  border-color: var(--glass-border-bright);
+}
+.pp.sel {
+  border-color: var(--accent-line);
+  background: linear-gradient(180deg, var(--accent-soft), var(--glass-fill) 42%);
+  box-shadow: 0 0 0 1px var(--accent-line), 0 0 34px -12px var(--accent-glow);
+}
+.ppRadio {
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  border: 1.5px solid var(--glass-border-bright);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.pp.sel .ppRadio {
+  border-color: var(--accent);
+}
+.pp.sel .ppRadio::after {
+  content: '';
+  width: 9px;
+  height: 9px;
+  border-radius: 999px;
+  background: var(--accent);
+}
+.ppPrice {
+  display: flex;
+  align-items: baseline;
+  gap: 3px;
+}
+.ppAmt {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.ppPer {
+  font-size: 12px;
+  color: var(--fg-3);
+}
+.ppList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.ppList li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--fg-2);
+}
+
+/* Payment step (step 3, paid plans) */
+.payGrid {
+  display: grid;
+  grid-template-columns: 1fr 300px;
+  gap: 22px;
+  margin-top: 22px;
+  text-align: left;
+}
+.paySummary {
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+.legal {
+  color: var(--fg-4);
+  font-size: 11.5px;
+  text-align: center;
+  margin-top: 18px;
+  line-height: 1.5;
+}
+.legal a {
+  color: var(--fg-3);
+}
+
+@media (max-width: 720px) {
+  .planPick,
+  .payGrid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* First/last name side by side, stacking on narrow screens. */
+.nameRow {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+@media (max-width: 420px) {
+  .nameRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Short windows (1366×768 laptops leave ~650px): keep the whole sign-up form,
+   including the "¿Ya tenés cuenta?" link, in view without scrolling. */
+@media (max-height: 700px) {
+  .stepsInd {
+    margin-bottom: 10px;
+  }
+  .pwMeter {
+    margin-top: 6px;
+  }
+  .pwReqs {
+    margin-top: 6px;
+  }
+}

@@ -1,0 +1,45 @@
+/* Express acceptance of the Terms and the Privacy Policy (Ley 25.326). A real
+   checkbox inside a label — the links inside it must stay links, which a
+   <button> toggle (Login's "keep me signed in") cannot contain. */
+.consent {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-top: 18px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-2);
+  cursor: pointer;
+  text-align: left;
+}
+.consent input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+}
+.consentBox {
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border-radius: 6px;
+  border: 1.5px solid var(--glass-border-bright);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: transparent;
+  flex: none;
+  transition: all var(--dur) var(--ease);
+}
+.consent input:checked + .consentBox {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.consent input:focus-visible + .consentBox {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}
+.consent a {
+  color: var(--accent);
+}

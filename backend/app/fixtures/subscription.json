@@ -1,0 +1,7 @@
+{
+  "planId": "pro",
+  "cycle": "monthly",
+  "paymentMethod": null,
+  "overageEnabled": false,
+  "overageCapArs": null
+}

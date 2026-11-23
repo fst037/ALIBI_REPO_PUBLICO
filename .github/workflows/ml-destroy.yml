@@ -1,0 +1,102 @@
+name: Destroy ALIBI ML infrastructure (targeted)
+
+# Targeted teardown for ML/terraform/envs/dev, mirroring infra-destroy.yml's
+# safety shape: explicit opt-in toggles, no blanket `terraform destroy`, and
+# core (IAM/storage/billing/ingestion) is never touched here — those hold
+# state/data other things depend on and are cheap to leave running anyway.
+#
+# destroy_inference defaults ON: this is the one resource here that bills
+# (~$1.9/hr on ml.g6e.xlarge) while its inference component has a copy up.
+# Since 2026-10-12 it scales itself to zero after ~15 idle minutes
+# (modules/inference), so leaving it deployed costs ~nothing; destroying it
+# removes it entirely (the backend then answers 503 for the modules using it).
+# There is no training toggle — module.training creates no AWS resources at
+# all, only a local job-config file and launch script, so there has never
+# been anything to tear down. (There used to be an mlflow_server toggle too
+# — that module was removed 2026-09-28.)
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy_inference:
+        description: "Destroy the inference endpoint (~$1.41/hr while up)"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: alibi-ml-terraform
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ML/terraform/envs/dev
+    env:
+      TF_VAR_hf_token: ${{ secrets.HF_TOKEN }}
+      TF_VAR_sagemaker_role_arn: ${{ vars.AWS_ML_SAGEMAKER_ROLE_ARN }}
+      TF_VAR_datasets_bucket: ${{ vars.AWS_ML_DATASETS_BUCKET }}
+      TF_VAR_artifacts_bucket: ${{ vars.AWS_ML_ARTIFACTS_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Build destroy targets
+        id: targets
+        run: |
+          ARGS=""
+          if [ "${{ inputs.destroy_inference }}" = "true" ]; then
+            # module.inference and module.inference_v2 are the first two endpoint
+            # generations (model-a-dev, model-a2-dev): declared nowhere, but left
+            # in state with their configs, models, scaling target and alarms.
+            # Targeting them destroys whatever is left; once they are gone it is
+            # a no-op.
+            ARGS="$ARGS -target=module.inference_v3 -target=module.inference_v2 -target=module.inference"
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          if [ -z "$ARGS" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform destroy
+        # No fallback to a blanket `terraform destroy` when every toggle is
+        # off — that would also take out core/IAM/storage. No-op instead.
+        if: steps.targets.outputs.empty == 'false'
+        run: terraform destroy -auto-approve ${{ steps.targets.outputs.args }}
+
+      # The original form of this step read module.storage/module.iam out of
+      # THIS root's state. Those modules moved to the unified root on
+      # 2026-07-13 and were deleted from here on 2026-09-06, so the check could
+      # only ever fail — every destroy run ended red regardless of outcome.
+      # What it was actually guarding is whether the buckets holding real data
+      # survived, so ask S3 that directly instead of asking the wrong state file.
+      - name: Confirm the data-bearing buckets survived
+        run: |
+          for bucket in "${{ vars.AWS_ML_DATASETS_BUCKET }}" "${{ vars.AWS_ML_ARTIFACTS_BUCKET }}"; do
+            if [ -z "$bucket" ]; then
+              echo "Bucket repo variable is empty — run infra-deploy.yml with deploy_ml=true." >&2
+              exit 1
+            fi
+            aws s3api head-bucket --bucket "$bucket"
+            echo "  ok: s3://$bucket"
+          done
+          echo "data buckets confirmed present"

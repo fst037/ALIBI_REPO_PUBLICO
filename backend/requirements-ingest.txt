@@ -1,0 +1,40 @@
+# Module B stage-1 "processor" dependencies — the file parsers.
+#
+# Deliberately NOT in requirements.txt: these are only needed where a raw file
+# is turned into a table. The API Lambda reads the resulting Parquet with
+# DuckDB and never parses a spreadsheet, so keeping them out holds its zip
+# under the 250 MB unzipped limit. The processor ships as a container image
+# (10 GB limit), which is exactly why it can afford them.
+#
+# Local development installs BOTH files: with ALIBI_JOB_RUNNER=thread the
+# pipeline runs in-process under uvicorn, so one venv plays both roles.
+#
+#   pip install -r requirements.txt -r requirements-ingest.txt
+
+-r requirements.txt
+
+# Tabular parsing, type coercion, and the DataFrame the profiler works over.
+# <3: pandas 3.0 defaults the "string" dtype to a PyArrow-backed
+# implementation (PDEP-14), which segfaults building the nullable columns in
+# app/ingest/profile.py::_to_frame under this pyarrow version. Pin to the 2.x
+# line, whose default "string" storage is the numpy-backed one this code
+# expects.
+pandas>=2.2,<3
+# Parquet writer (also pandas' engine). The processor serialises to bytes and
+# hands them to the ObjectStore, rather than letting a library write to S3
+# itself — that keeps local-disk and S3 modes on one code path.
+pyarrow>=17
+# Excel. openpyxl for .xlsx (and the merged-cell metadata the island detector
+# needs, which pandas' reader throws away).
+openpyxl>=3.1,<4
+# PDF with a real text layer: table extraction via both the ruling-line
+# ("lattice") and text-alignment ("stream") strategies.
+pdfplumber>=0.11,<0.12
+# Word: embedded tables.
+python-docx>=1.1,<2
+# Encoding detection for CSV/TXT. charset-normalizer over chardet: same job,
+# actively maintained, and already in most dependency trees via requests.
+charset-normalizer>=3.3,<4
+# Semantic inference and embeddings call Bedrock through boto3
+# (`app/core/bedrock.py`), which the processor image already has — no extra
+# client library (the `openai` SDK that reached Azure was removed 2026-10-05).

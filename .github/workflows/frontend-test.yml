@@ -1,0 +1,69 @@
+name: frontend-test
+
+# The frontend's tests, on every PR and push that touches it. No AWS, no
+# backend, no model: component tests run in jsdom, and the end-to-end tests run
+# the production build in Chromium, Firefox and WebKit (+ a phone-sized WebKit)
+# with the API answered inside the browser (frontend/e2e/mockApi.ts).
+#
+# frontend-deploy.yml also runs the unit tests before it deploys; the browser
+# matrix lives here so a deploy does not wait on three browser downloads.
+
+on:
+  pull_request:
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-test.yml"
+  push:
+    branches: [main, dev]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-test.yml"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-test-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # Pinned: ubuntu-latest moved to 26.04, which Playwright 1.57 has no browser
+    # builds for ("Playwright does not support chromium on ubuntu26.04-x64").
+    # Move on together with a Playwright upgrade that lists 26.04.
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Unit and component tests
+        run: npm test
+
+      - name: Type-check the end-to-end tests
+        run: npm run typecheck:e2e
+
+      - name: Install browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: End-to-end tests (Chromium, Firefox, WebKit, phone)
+        run: npm run e2e
+
+      - name: Upload the report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: frontend/playwright-report/
+          retention-days: 14

@@ -1,0 +1,11 @@
+# MLflow python_env for the GPU pipeline stages (train, test_model's
+# model-loading half). Reuses requirements_qlora.txt directly plus mlflow —
+# one dependency list, not duplicated between the training script and the
+# pipeline environment declaration.
+python: "3.11"
+build_dependencies:
+  - pip
+  - setuptools
+  - wheel
+dependencies:
+  - -r ../src/model_a/requirements_qlora.txt

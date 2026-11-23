@@ -1,0 +1,71 @@
+[
+  {
+    "id": "sales",
+    "name": "sales_2024.csv",
+    "fileType": "csv",
+    "rows": 12480,
+    "columns": 6,
+    "sizeLabel": "2.1 MB",
+    "meta": "12,480 rows · 3 days ago",
+    "favorite": true,
+    "recent": true,
+    "status": "processed",
+    "createdAt": "2026-07-08",
+    "updatedAt": "2026-07-08"
+  },
+  {
+    "id": "budget",
+    "name": "budget_q1.xlsx",
+    "fileType": "xlsx",
+    "rows": 840,
+    "columns": 4,
+    "sizeLabel": "512 KB",
+    "meta": "840 rows · 5 days ago",
+    "favorite": false,
+    "recent": true,
+    "status": "processed",
+    "createdAt": "2026-07-06",
+    "updatedAt": "2026-07-06"
+  },
+  {
+    "id": "customers",
+    "name": "active_customers.csv",
+    "fileType": "csv",
+    "rows": 5210,
+    "columns": 5,
+    "sizeLabel": "1.3 MB",
+    "meta": "5,210 rows · 1 week ago",
+    "favorite": true,
+    "recent": true,
+    "status": "processed",
+    "createdAt": "2026-07-04",
+    "updatedAt": "2026-07-04"
+  },
+  {
+    "id": "inventory",
+    "name": "warehouse_stock.xlsx",
+    "fileType": "xlsx",
+    "rows": 3100,
+    "columns": 5,
+    "sizeLabel": "720 KB",
+    "meta": "3,100 rows · 2 weeks ago",
+    "favorite": false,
+    "recent": false,
+    "status": "processed",
+    "createdAt": "2026-06-27",
+    "updatedAt": "2026-06-27"
+  },
+  {
+    "id": "report",
+    "name": "annual_report.pdf",
+    "fileType": "pdf",
+    "pages": 18,
+    "sizeLabel": "4.8 MB",
+    "meta": "18 pages · 1 month ago",
+    "favorite": false,
+    "recent": false,
+    "status": "processed",
+    "createdAt": "2026-06-11",
+    "updatedAt": "2026-06-11"
+  }
+]

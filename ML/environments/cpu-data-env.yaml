@@ -1,0 +1,13 @@
+# MLflow python_env for the CPU/data pipeline stages (download, eda, clean,
+# preprocess, split, publish, and the non-model-loading half of test_model).
+# Uses MLflow's virtualenv-based env manager, not conda — this repo has no
+# conda dependency anywhere (see requirements.txt/requirements-dev.txt across
+# the project); `mlflow run --env-manager virtualenv` (the default env
+# manager once a python_env is declared) just needs `pip install virtualenv`.
+python: "3.11"
+build_dependencies:
+  - pip
+  - setuptools
+  - wheel
+dependencies:
+  - -r ../src/model_a/requirements_pipeline.txt

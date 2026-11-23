@@ -1,0 +1,15 @@
+# Installed by the SageMaker HuggingFace inference container from
+# model.tar.gz/code/requirements.txt (ml-endpoint.yml copies this file there as
+# requirements.txt). transformers/torch come from the image; these are the extras
+# the QLoRA handler imports.
+# >=5.8: the image ships 5.5.3, whose loader materialises Qwen3.8's weights in bf16
+# on the GPU before quantising them (OOM on a 24 GB card). Same floor as training.
+transformers>=5.8
+peft>=0.17
+bitsandbytes>=0.46
+accelerate>=1.0
+sqlglot>=23.0
+# Gated-DeltaNet fast path for Qwen3.8 (transformers falls back to plain PyTorch
+# without it, several times slower per token — and a chart spec is ~10x longer than
+# a SQL query, against SageMaker's 60 s real-time request limit).
+flash-linear-attention

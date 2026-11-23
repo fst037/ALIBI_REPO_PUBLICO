@@ -1,0 +1,128 @@
+[
+  {
+    "datasetId": "sales",
+    "rowCount": 12480,
+    "confidence": "high",
+    "columns": [
+      {
+        "name": "date",
+        "type": "Date",
+        "sampleValues": "2024-01-05, 2024-01-06…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "region",
+        "type": "Text",
+        "sampleValues": "Buenos Aires, Córdoba…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "product",
+        "type": "Text",
+        "sampleValues": "Notebook, Monitor…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "sales",
+        "type": "Number",
+        "sampleValues": "128450, 84210…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "units",
+        "type": "Whole number",
+        "sampleValues": "42, 18, 63…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "margin_pct",
+        "type": "Percentage",
+        "sampleValues": "12.4, 6.1, 8.3…",
+        "included": true,
+        "confidence": "medium"
+      }
+    ]
+  },
+  {
+    "datasetId": "customers",
+    "rowCount": 5210,
+    "confidence": "high",
+    "columns": [
+      {
+        "name": "customer_id",
+        "type": "Whole number",
+        "sampleValues": "1001, 1002…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "name",
+        "type": "Text",
+        "sampleValues": "Acme SA, Globex…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "segment",
+        "type": "Text",
+        "sampleValues": "Retail, Wholesale…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "signup_date",
+        "type": "Date",
+        "sampleValues": "2023-03-11, 2023-05-02…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "active",
+        "type": "Boolean",
+        "sampleValues": "true, false…",
+        "included": true,
+        "confidence": "medium"
+      }
+    ]
+  },
+  {
+    "datasetId": "budget",
+    "rowCount": 840,
+    "confidence": "medium",
+    "columns": [
+      {
+        "name": "area",
+        "type": "Text",
+        "sampleValues": "Marketing, Sales…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "month",
+        "type": "Date",
+        "sampleValues": "2024-01, 2024-02…",
+        "included": true,
+        "confidence": "medium"
+      },
+      {
+        "name": "budget",
+        "type": "Number",
+        "sampleValues": "500000, 320000…",
+        "included": true,
+        "confidence": "high"
+      },
+      {
+        "name": "spent",
+        "type": "Number",
+        "sampleValues": "480200, 291000…",
+        "included": true,
+        "confidence": "medium"
+      }
+    ]
+  }
+]

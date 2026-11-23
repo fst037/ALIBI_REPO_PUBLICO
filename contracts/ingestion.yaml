@@ -1,0 +1,1186 @@
+openapi: 3.0.3
+info:
+  title: ALIBI — Ingestion domain
+  version: 0.2.0
+  description: >
+    Zero-ETL ingestion (Module B): file upload, table detection, schema inference, confirmation, and
+    organisation into folders.
+
+    **Upload flow (v0.2 — replaces v0.1's multipart `POST /datasets`):**
+      1. `POST /uploads` validates type/size/plan limits and returns a presigned URL.
+      2. The browser `PUT`s the file straight to that URL (the progress bar's real progress comes from
+      the XHR `progress` event, not from a simulated timer).
+      3. The client polls `GET /uploads/{id}` until `ready` or `error`.
+      4. One file can contain SEVERAL tables (Excel sheets with more than one table, PDFs with
+      embedded tables). Each detected table is materialised as its own `Dataset`, grouped by
+      `uploadId`. The user confirms each one's schema with `PUT /datasets/{id}/schema`.
+
+    The original document is DELETED once processed: all that persists is the resulting table
+    (Parquet in the data plane) plus its metadata in Postgres.
+
+    **Folders:** one level, no nesting. The folder↔dataset relationship is many-to-many and is only
+    a mapping — attaching a dataset to a second folder does not duplicate data, and deleting a
+    folder never deletes datasets.
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: datasets
+    description: "Workspace datasets and their inferred schema."
+  - name: uploads
+    description: "File upload and tracking of the asynchronous processing."
+  - name: folders
+    description: "Folders (projects) that group datasets."
+
+paths:
+  # ────────────────────────────────────────────────────────────────────────
+  # Uploads
+  # ────────────────────────────────────────────────────────────────────────
+  /uploads:
+    get:
+      tags: [uploads]
+      operationId: listUploads
+      summary: "The user's recent uploads (including the ones still processing)."
+      responses:
+        '200':
+          description: "The user's uploads, most recent first."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Upload' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [uploads]
+      operationId: createUpload
+      summary: "Registers an upload and returns a presigned URL to upload the file."
+      description: >
+        Does not receive the file: it validates name, type and size against the plan's limits and
+        returns a URL for uploading straight to the object store. The file never passes through the API
+        Lambda, so its size is not bounded by API Gateway's maximum payload.
+
+        The upload stays `pending` until the `PUT` to `uploadUrl` finishes; from there processing starts
+        on its own.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateUploadRequest' }
+      responses:
+        '201':
+          description: "Upload registered; upload the file to `uploadUrl`."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateUploadResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403':
+          description: "The plan's dataset limit was reached (upsell to a higher tier)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: dataset_limit_reached, message: 'You''ve hit your plan''s dataset limit.' }
+        '413':
+          description: "The file exceeds the size allowed by the plan."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: file_too_large, message: 'The file exceeds your plan''s 25 MB maximum.' }
+        '415':
+          description: "Unsupported file type."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: unsupported_file_type, message: 'Unsupported format. Use CSV, XLSX, PDF, DOCX or JSON.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /uploads/{id}:
+    parameters:
+      - $ref: '#/components/parameters/UploadIdPath'
+    get:
+      tags: [uploads]
+      operationId: getUpload
+      summary: "Status of an upload (polling endpoint)."
+      description: >
+        `phase` advances `uploading → extracting → profiling → inferring → storing`; the Ingestion 1.1
+        UI shows those steps. When `status` reaches `ready`, `datasets` carries one entry per detected
+        table, each in `awaiting_confirmation`.
+      responses:
+        '200':
+          description: "Status of the upload."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upload' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [uploads]
+      operationId: deleteUpload
+      summary: "Cancels an upload and discards what was processed."
+      description: >
+        Deletes the raw file if it still exists, along with the derived datasets that have not been
+        confirmed yet. Already-confirmed datasets are NOT touched — for those, use `DELETE
+        /datasets/{id}`.
+      responses:
+        '204': { description: Carga cancelada. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /uploads/{id}/retry:
+    parameters:
+      - $ref: '#/components/parameters/UploadIdPath'
+    post:
+      tags: [uploads]
+      operationId: retryUpload
+      summary: "Retries the processing of a failed upload."
+      description: >
+        Only valid when `status: error` and the raw file is still available (it is kept for 7 days after
+        a failure). Retrying one upload does not affect the others.
+      responses:
+        '202':
+          description: "Retry queued."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Upload' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The upload is not in `error`, or the raw file has already expired."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: retry_unavailable, message: 'The original file is no longer available. Upload it again.' }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Datasets
+  # ────────────────────────────────────────────────────────────────────────
+  /datasets:
+    get:
+      tags: [datasets]
+      operationId: listDatasets
+      summary: "List of workspace datasets (Library)."
+      parameters:
+        - name: folderId
+          in: query
+          required: false
+          description: "Returns only the datasets attached to this folder."
+          schema: { type: string }
+        - name: status
+          in: query
+          required: false
+          description: "Filters by status (e.g. `awaiting_confirmation` for the confirmation screen)."
+          schema: { $ref: '#/components/schemas/DatasetStatus' }
+      responses:
+        '200':
+          description: "Workspace datasets."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Dataset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /datasets/{id}:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [datasets]
+      operationId: getDataset
+      summary: "Detail of a dataset."
+      responses:
+        '200':
+          description: "The requested dataset."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dataset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [datasets]
+      operationId: updateDataset
+      summary: "Updates a dataset (rename and/or mark as favorite)."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDatasetRequest' }
+      responses:
+        '200':
+          description: "Dataset updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dataset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [datasets]
+      operationId: deleteDataset
+      summary: "Deletes a dataset (confirmed in the UI)."
+      description: >
+        Deletes the dataset, its schema, its Parquet table, its conversations, its saved charts and its
+        folder links. Irreversible action; the confirmation lives in the client.
+      responses:
+        '204': { description: Dataset eliminado. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /datasets/{id}/schema:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [datasets]
+      operationId: getSchema
+      summary: "Inferred schema of the dataset (Ingestion 1.2)."
+      responses:
+        '200':
+          description: "Inferred schema."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatasetSchema' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The schema is not ready yet (dataset still `processing`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: schema_not_ready, message: 'We''re still inferring the file''s structure.' }
+    put:
+      tags: [datasets]
+      operationId: confirmSchema
+      summary: "Confirms the (possibly edited) schema and activates the dataset."
+      description: >
+        Persists the schema as edited by the user (renames, types, included columns) and moves the
+        dataset from `awaiting_confirmation` to `processed`.
+
+        Renames, exclusions and type changes do NOT rewrite the Parquet: they are stored as metadata and
+        applied as a projection at query time. The data file stays immutable, so confirming is
+        reversible and cheap.
+
+        **ETLite** (optional): `cleaning` on each column and on the request is a light cleaning recipe
+        (empty cells, whitespace, casing, placeholders, rounding, duplicate rows). It is validated
+        against the stored table and then **applied to it**: the cleaned table replaces the dataset's
+        Parquet (the exception to the paragraph above — ALIBI never kept the uploaded document, the
+        user has it). The recipe itself is not stored. `Dataset.rows`, `sizeLabel` and
+        `DatasetSchema.rowCount` describe the cleaned table, and example values are refreshed for
+        columns whose values changed. A recipe that cannot apply is a `422` `invalid_cleaning`;
+        nothing is written and the dataset stays `awaiting_confirmation`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmSchemaRequest' }
+      responses:
+        '200':
+          description: "Schema confirmed; dataset active."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dataset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /datasets/{id}/preview:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [datasets]
+      operationId: previewDataset
+      summary: "First rows of the table (schema confirmation and Library drawer)."
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 20 }
+      responses:
+        '200':
+          description: "Sample rows."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TablePreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The table is not materialised yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /datasets/{id}/quality:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [datasets]
+      operationId: getDatasetQuality
+      summary: "Empty cells, stray whitespace and duplicate rows in the stored table (ETLite)."
+      description: "Counted over the table as ingested, before any cleaning — what ETLite could fix."
+      responses:
+        '200':
+          description: "What the table holds."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatasetQuality' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The table is not materialised yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /datasets/{id}/cleaning-preview:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    post:
+      tags: [datasets]
+      operationId: previewCleaning
+      summary: "The table with an ETLite recipe applied, without saving anything."
+      description: >
+        Same validation as `PUT /datasets/{id}/schema`, so a recipe that previews is one that saves.
+      parameters:
+        - name: limit
+          in: query
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 200, default: 8 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CleaningPreviewRequest' }
+      responses:
+        '200':
+          description: "Rows after cleaning, and the fill values resolved."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CleaningPreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The table is not materialised yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: "An operation cannot apply to its column (e.g. trimming a number, a fill value of the wrong type)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: invalid_cleaning, message: '«2,5» no es un valor válido para «cantidad».' }
+
+  /datasets/{id}/update-targets:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [datasets]
+      operationId: getUpdateTargets
+      summary: "Confirmed datasets that a freshly uploaded table could append to or replace."
+      description: >
+        `id` is the unconfirmed table an upload produced. Each candidate says whether its structure
+        matches (same columns by header, compatible kinds) and, if not, how it differs. Fitting ones first.
+      responses:
+        '200':
+          description: "Candidates."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/UpdateTarget' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /datasets/{id}/update-preview:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    post:
+      tags: [datasets]
+      operationId: previewDatasetUpdate
+      summary: "What appending or replacing would do, without saving it."
+      description: >
+        `id` is the dataset being updated. A structure difference comes back as `compatible: false`
+        with the list, not as an error.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatasetUpdateRequest' }
+      responses:
+        '200':
+          description: "Row counts and the stored cleaning recipe."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DatasetUpdatePreview' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The dataset is not confirmed, or the uploaded table is no longer available."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: "A value does not fit its column, the recipe cannot apply, or the result exceeds the row limit."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /datasets/{id}/update:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    post:
+      tags: [datasets]
+      operationId: applyDatasetUpdate
+      summary: "Append a new file's rows to the dataset, or replace them, keeping its id."
+      description: >
+        The dataset keeps its id and column names, so charts and boards built on it keep working.
+        The uploaded table is consumed. 422 `structure_mismatch` when the file is not the same
+        structure; nothing is written then. The recipe sent is applied to the combined table and
+        stored for the next update (none clears it).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/DatasetUpdateRequest' }
+      responses:
+        '200':
+          description: "The updated dataset."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dataset' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "The dataset is not confirmed, or the uploaded table is no longer available."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: "`structure_mismatch`, `incompatible_values`, `invalid_cleaning` or `row_limit_exceeded`."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  # ────────────────────────────────────────────────────────────────────────
+  # Folders
+  # ────────────────────────────────────────────────────────────────────────
+  /folders:
+    get:
+      tags: [folders]
+      operationId: listFolders
+      summary: "The user's folders."
+      responses:
+        '200':
+          description: "Folders, each with its dataset count."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Folder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [folders]
+      operationId: createFolder
+      summary: "Creates a folder."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateFolderRequest' }
+      responses:
+        '201':
+          description: "Folder created."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Folder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: "A folder with that name already exists."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: folder_name_taken, message: 'You already have a folder with that name.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /folders/{id}:
+    parameters:
+      - $ref: '#/components/parameters/FolderIdPath'
+    get:
+      tags: [folders]
+      operationId: getFolder
+      summary: "Detail of a folder, with its datasets."
+      responses:
+        '200':
+          description: "The requested folder."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FolderDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [folders]
+      operationId: updateFolder
+      summary: "Renames a folder."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateFolderRequest' }
+      responses:
+        '200':
+          description: "Folder updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Folder' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409':
+          description: "A folder with that name already exists."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [folders]
+      operationId: deleteFolder
+      summary: "Deletes the folder."
+      description: >
+        Deletes ONLY the folder and its links. The datasets go on existing and stay reachable from the
+        Library — the relationship is a mapping, not an ownership hierarchy.
+      responses:
+        '204': { description: Folder deleted. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /folders/{id}/datasets:
+    parameters:
+      - $ref: '#/components/parameters/FolderIdPath'
+    post:
+      tags: [folders]
+      operationId: attachDatasets
+      summary: "Attaches existing datasets to the folder."
+      description: >
+        Idempotent: attaching an already-attached dataset is not an error. A dataset can live in several
+        folders at once; this creates a link, never a copy.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AttachDatasetsRequest' }
+      responses:
+        '200':
+          description: "Folder updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/FolderDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /folders/{id}/datasets/{datasetId}:
+    parameters:
+      - $ref: '#/components/parameters/FolderIdPath'
+      - name: datasetId
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [folders]
+      operationId: detachDataset
+      summary: "Removes a dataset from the folder (does not delete it)."
+      responses:
+        '204': { description: Link removed. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DatasetIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    UploadIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    FolderIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: "The session token is missing or invalid."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthorized, message: 'Sign in to continue.' }
+    NotFound:
+      description: "The resource does not exist."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: not_found, message: 'The resource was not found.' }
+    ValidationError:
+      description: "The request body failed validation."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: validation_error
+              message: 'Check the highlighted fields.'
+
+  schemas:
+    # ---- Uploads ----------------------------------------------------------
+    DatasetFileType:
+      type: string
+      enum: [csv, xlsx, pdf, docx, json]
+
+    UploadStatus:
+      type: string
+      description: >
+        `pending` = URL issued, file not uploaded yet · `uploaded` = the file arrived, waiting for the
+        worker · `processing` = in progress · `ready` = tables detected and materialised · `error` =
+        failed.
+      enum: [pending, uploaded, processing, ready, error]
+
+    UploadPhase:
+      type: string
+      description: "Current step within `processing`; feeds the Ingestion 1.1 stepper."
+      enum: [uploading, extracting, profiling, inferring, storing, done]
+
+    Upload:
+      type: object
+      required: [id, filename, fileType, sizeBytes, status, createdAt]
+      properties:
+        id: { type: string, example: up_7f3a1c }
+        filename: { type: string, example: ventas_2024.xlsx }
+        fileType: { $ref: '#/components/schemas/DatasetFileType' }
+        sizeBytes: { type: integer, example: 2202009 }
+        sizeLabel: { type: string, example: '2,1 MB' }
+        status: { $ref: '#/components/schemas/UploadStatus' }
+        phase: { $ref: '#/components/schemas/UploadPhase' }
+        detectedTables:
+          type: integer
+          description: "Number of tables found in the file (can be > 1)."
+          example: 3
+        datasets:
+          type: array
+          description: "'One dataset per detected table. Empty until `status: ready`.'"
+          items: { $ref: '#/components/schemas/Dataset' }
+        warnings:
+          type: array
+          description: >
+            Non-fatal notes for the confirmation screen: what the system assumed and what it discarded, e.g.
+            "We found 2 tables in the file", "We discarded a totals row" or "We generated the column names
+            because the file had no header". Inferences are shown, not applied silently.
+          items: { type: string }
+        error:
+          type: string
+          nullable: true
+          description: >
+            Concrete, jargon-free message when `status: error`, e.g. "We couldn't read the file. Check that
+            it isn't damaged or password-protected." or "The PDF has no text layer: it looks like a scan."
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    CreateUploadRequest:
+      type: object
+      required: [filename, sizeBytes]
+      properties:
+        filename: { type: string, minLength: 1, example: ventas_2024.xlsx }
+        sizeBytes: { type: integer, minimum: 1 }
+        contentType: { type: string, example: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet }
+        folderId:
+          type: string
+          nullable: true
+          description: "If present, the resulting datasets are attached to this folder once confirmed."
+
+    CreateUploadResponse:
+      type: object
+      required: [upload, uploadUrl, method, expiresAt]
+      properties:
+        upload: { $ref: '#/components/schemas/Upload' }
+        uploadUrl:
+          type: string
+          description: "Presigned URL. The client `PUT`s the file as-is, without wrapping it in multipart."
+        method:
+          type: string
+          enum: [PUT]
+        headers:
+          type: object
+          additionalProperties: { type: string }
+          description: "Headers that must be sent with the `PUT` (e.g. `Content-Type`)."
+        expiresAt: { type: string, format: date-time }
+
+    # ---- Datasets ---------------------------------------------------------
+    DatasetStatus:
+      type: string
+      description: >
+        `awaiting_confirmation` is new in v0.2: the table already exists and can be previewed, but the
+        user has not confirmed the schema yet, so it is not queryable.
+      enum: [processed, processing, awaiting_confirmation, error]
+
+    Dataset:
+      type: object
+      required: [id, name, fileType, meta, favorite, recent, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, example: ds_ventas_01 }
+        name: { type: string, example: ventas_2024 }
+        fileType: { $ref: '#/components/schemas/DatasetFileType' }
+        tableName:
+          type: string
+          description: "SQL identifier of the table; this is the name Modules A and C use in the FROM."
+          example: ventas_2024
+        uploadId:
+          type: string
+          nullable: true
+          description: "The upload it came from. Several datasets can share it."
+        sourceLabel:
+          type: string
+          nullable: true
+          description: >
+            Provenance within the file, to disambiguate when one upload produces several tables. E.g. "Sheet
+            «Sales» · table 2" or "Page 4".
+          example: Sheet «Sales» · table 2
+        folderIds:
+          type: array
+          items: { type: string }
+          description: "Folders it is attached to (there can be more than one)."
+        rows:
+          type: integer
+          description: "Row count (tabular). Absent for PDFs with no table, which use `pages` instead."
+        pages:
+          type: integer
+          description: "Page count (PDF)."
+        columns:
+          type: integer
+          description: "Columns included in the confirmed schema."
+        sizeLabel: { type: string, example: '2,1 MB' }
+        meta:
+          type: string
+          description: "Pre-built secondary line, e.g. \"12,480 rows · 3 days ago\"."
+        favorite: { type: boolean }
+        recent: { type: boolean }
+        status: { $ref: '#/components/schemas/DatasetStatus' }
+        createdAt: { type: string, format: date }
+        updatedAt: { type: string, format: date }
+        error:
+          type: string
+          nullable: true
+
+    ColumnType:
+      type: string
+      enum: [Text, Number, Whole number, Date, Percentage, Boolean]
+
+    VegaLiteType:
+      type: string
+      description: "Type hint consumed by Module C to choose the encoding."
+      enum: [quantitative, nominal, ordinal, temporal]
+
+    InferenceConfidence:
+      type: string
+      enum: [high, medium, low]
+
+    SchemaColumn:
+      type: object
+      required: [name, type, sampleValues, included, confidence]
+      properties:
+        name:
+          type: string
+          description: "Name to display and to use in SQL (it may have been renamed by the user or by semantic inference)."
+        sourceName:
+          type: string
+          nullable: true
+          description: >
+            Raw header exactly as it came in the file. Kept so the user recognises the column when semantic
+            inference renamed it (`dt_vcto` → `due_date`).
+        type: { $ref: '#/components/schemas/ColumnType' }
+        vlType: { $ref: '#/components/schemas/VegaLiteType' }
+        description:
+          type: string
+          nullable: true
+          description: "Natural-language description of what the column represents."
+        sampleValues:
+          type: string
+          description: "Example values, e.g. \"Buenos Aires, Córdoba…\"."
+        included:
+          type: boolean
+          description: "Whether the column is included in the active dataset."
+        isPrimaryKey: { type: boolean }
+        confidence: { $ref: '#/components/schemas/InferenceConfidence' }
+        cleaning:
+          type: object
+          description: "ETLite, request only (confirm and cleaning preview). Applied to the data, never stored: always null when read back."
+          allOf:
+            - $ref: '#/components/schemas/ColumnCleaning'
+          nullable: true
+
+    NullStrategy:
+      type: string
+      description: >
+        What ETLite does with a column's empty cells. `drop_row` drops every row where it is empty;
+        `value` fills with `ColumnCleaning.fillValue`; `mode` is the most frequent value.
+      enum: [keep, drop_row, zero, mean, median, mode, value]
+
+    TextCase:
+      type: string
+      enum: [keep, upper, lower]
+
+    ColumnCleaning:
+      type: object
+      description: >
+        ETLite's per-column recipe. Values are normalised first (trim → case → placeholders → rounding)
+        and the null strategy runs on the result. Previewed with `POST /datasets/{id}/cleaning-preview`,
+        applied to the stored table on confirmation.
+      properties:
+        nulls: { $ref: '#/components/schemas/NullStrategy' }
+        fillValue:
+          type: string
+          nullable: true
+          description: >
+            For `value`, what the user typed. For `zero`/`mean`/`median`/`mode` the server resolves it
+            (returned in `CleaningPreview.fills`); a value sent for those is ignored.
+        trim:
+          type: boolean
+          description: "Strip both ends and collapse inner runs of whitespace. Text columns only."
+        case: { $ref: '#/components/schemas/TextCase' }
+        nullTokens:
+          type: array
+          maxItems: 20
+          items: { type: string }
+          description: "Values that mean \"no data\" in this file, compared ignoring case. Text columns only."
+        decimals:
+          type: integer
+          nullable: true
+          minimum: 0
+          maximum: 6
+          description: "Round to this many decimals. Decimal-number columns only."
+
+    DuplicateStrategy:
+      type: string
+      description: "`exact`: identical in every included column. `by_columns`: same values in `duplicateColumns`."
+      enum: [keep, exact, by_columns]
+
+    TableCleaning:
+      type: object
+      description: "ETLite's table-level recipe. The first occurrence of a duplicate (in file order) is kept."
+      properties:
+        duplicates: { $ref: '#/components/schemas/DuplicateStrategy' }
+        duplicateColumns:
+          type: array
+          description: "Ordinals into the schema's column list (not names, so a rename cannot move them)."
+          items: { type: integer }
+
+    DatasetSchema:
+      type: object
+      required: [datasetId, rowCount, confidence, columns]
+      properties:
+        datasetId: { type: string }
+        rowCount:
+          type: integer
+          description: "Rows in the stored table (after ETLite's cleaning, when it was confirmed with one)."
+        confidence: { $ref: '#/components/schemas/InferenceConfidence' }
+        tableDescription:
+          type: string
+          nullable: true
+          description: "One-sentence summary of what the table represents."
+        confirmed: { type: boolean }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/SchemaColumn' }
+
+    PreviewColumn:
+      type: object
+      required: [key, label, align]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        align: { type: string, enum: [left, num] }
+
+    TablePreview:
+      type: object
+      description: >
+        Deliberately the same shape as `ResultTable` in `chat.yaml`: that way the frontend's `DataTable`
+        renders an ingestion preview and a query result with the same component, with no adapter.
+      required: [datasetId, columns, rows]
+      properties:
+        datasetId: { type: string }
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/PreviewColumn' }
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              oneOf:
+                - { type: string }
+                - { type: number }
+        truncated:
+          type: boolean
+          description: "True if the table has more rows than the ones returned."
+
+    UpdateDatasetRequest:
+      type: object
+      description: "Partial patch — at least one of `name` or `favorite`."
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1 }
+        favorite: { type: boolean }
+
+    ConfirmSchemaRequest:
+      type: object
+      required: [columns]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          description: "Final name of the dataset (the UI allows renaming it on confirmation, above all when one upload produced several tables)."
+        columns:
+          type: array
+          description: "Final schema after the user's edits (renames, types, inclusion, ETLite cleaning)."
+          items: { $ref: '#/components/schemas/SchemaColumn' }
+        cleaning:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/TableCleaning'
+          nullable: true
+
+    ColumnQuality:
+      type: object
+      required: [ordinal, kind, nullCount]
+      properties:
+        ordinal: { type: integer }
+        kind:
+          type: string
+          description: "Family of the column's physical type — decides which ETLite operations apply."
+          enum: [integer, number, text, date, boolean, other]
+        nullCount: { type: integer }
+        whitespaceCount:
+          type: integer
+          description: "Text only: cells that trimming would change."
+
+    DatasetQuality:
+      type: object
+      required: [datasetId, rowCount, duplicateRows, columns]
+      properties:
+        datasetId: { type: string }
+        rowCount: { type: integer }
+        duplicateRows:
+          type: integer
+          description: "Rows identical to an earlier row in every column."
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ColumnQuality' }
+
+    CleaningPreviewRequest:
+      type: object
+      required: [columns]
+      properties:
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/SchemaColumn' }
+        cleaning:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/TableCleaning'
+          nullable: true
+
+    ResolvedFill:
+      type: object
+      required: [ordinal, value]
+      properties:
+        ordinal: { type: integer }
+        value:
+          type: string
+          description: "The literal the empty cells get, e.g. the mean the server computed."
+
+    CleaningPreview:
+      type: object
+      required: [rowCount, removedRows, preview]
+      properties:
+        rowCount: { type: integer }
+        removedRows:
+          type: integer
+          description: "Rows dropped by `drop_row` and duplicate removal together."
+        fills:
+          type: array
+          items: { $ref: '#/components/schemas/ResolvedFill' }
+        preview: { $ref: '#/components/schemas/TablePreview' }
+
+    UpdateMode:
+      type: string
+      description: "append: the rows go after the existing ones. replace: the rows are the dataset."
+      enum: [append, replace]
+
+    OverlapStrategy:
+      type: string
+      description: "On append, what to do with incoming rows identical to a stored row."
+      enum: [keep_all, skip]
+
+    ColumnRecipe:
+      type: object
+      required: [ordinal, cleaning]
+      properties:
+        ordinal: { type: integer }
+        cleaning: { $ref: '#/components/schemas/ColumnCleaning' }
+
+    CleaningRecipe:
+      type: object
+      description: "ETLite's recipe as stored on a dataset, by column ordinal."
+      properties:
+        table:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/TableCleaning'
+          nullable: true
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ColumnRecipe' }
+
+    StructureDifference:
+      type: object
+      required: [kind, column]
+      properties:
+        kind: { type: string, enum: [missing, extra, type, ambiguous] }
+        column: { type: string }
+        expected: { type: string, description: "For `type`: what the dataset holds." }
+        found: { type: string, description: "For `type`: what the file has." }
+
+    UpdateTarget:
+      type: object
+      required: [datasetId, name, compatible]
+      properties:
+        datasetId: { type: string }
+        name: { type: string }
+        rows: { type: integer }
+        compatible: { type: boolean }
+        differences:
+          type: array
+          items: { $ref: '#/components/schemas/StructureDifference' }
+
+    DatasetUpdateRequest:
+      type: object
+      required: [stagedDatasetId, mode]
+      properties:
+        stagedDatasetId:
+          type: string
+          description: "The unconfirmed dataset the upload produced; consumed by the update."
+        mode: { $ref: '#/components/schemas/UpdateMode' }
+        onOverlap: { $ref: '#/components/schemas/OverlapStrategy' }
+        cleaning:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/CleaningRecipe'
+          nullable: true
+
+    DatasetUpdatePreview:
+      type: object
+      required: [compatible]
+      properties:
+        compatible: { type: boolean }
+        differences:
+          type: array
+          items: { $ref: '#/components/schemas/StructureDifference' }
+        existingRows: { type: integer }
+        incomingRows: { type: integer }
+        overlapRows:
+          type: integer
+          description: "Append only: incoming rows identical to a stored row in every column."
+        resultRows:
+          type: integer
+          description: "Rows the dataset would have, after the overlap choice and the recipe."
+        storedCleaning:
+          type: object
+          allOf:
+            - $ref: '#/components/schemas/CleaningRecipe'
+          nullable: true
+        fills:
+          type: array
+          items: { $ref: '#/components/schemas/ResolvedFill' }
+
+    # ---- Folders ----------------------------------------------------------
+    Folder:
+      type: object
+      required: [id, name, datasetCount, createdAt]
+      properties:
+        id: { type: string, example: fld_finanzas }
+        name: { type: string, example: Finanzas 2024 }
+        datasetCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    FolderDetail:
+      allOf:
+        - $ref: '#/components/schemas/Folder'
+        - type: object
+          required: [datasets]
+          properties:
+            datasets:
+              type: array
+              items: { $ref: '#/components/schemas/Dataset' }
+
+    CreateFolderRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+        datasetIds:
+          type: array
+          description: "Datasets to attach at creation time."
+          items: { type: string }
+
+    UpdateFolderRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 80 }
+
+    AttachDatasetsRequest:
+      type: object
+      required: [datasetIds]
+      properties:
+        datasetIds:
+          type: array
+          minItems: 1
+          items: { type: string }
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+security:
+  - bearerAuth: []

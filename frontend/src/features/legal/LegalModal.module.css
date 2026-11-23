@@ -1,0 +1,176 @@
+/* The Terms / Privacy Policy modal (features/legal). */
+
+.panel {
+  /* Tall reading panel: the header stays, the document scrolls. */
+  height: calc(100vh - 64px);
+}
+
+.head {
+  flex: none;
+  padding: 14px 64px 14px 24px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.tab {
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--fg-2);
+  background: transparent;
+  border: none;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+}
+.tab:hover,
+.tab.current {
+  color: var(--fg-1);
+  background: var(--glass-fill);
+}
+
+.scroll {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 32px 40px;
+}
+
+.intro {
+  padding: 28px 0 22px;
+  border-bottom: 1px solid var(--glass-border);
+  margin-bottom: 26px;
+}
+.intro h2 {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 10px 0 0;
+}
+.meta {
+  margin-top: 8px;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.lead {
+  margin: 14px 0 0;
+  max-width: 720px;
+  color: var(--fg-2);
+  font-size: 14.5px;
+  line-height: 1.65;
+}
+
+.cols {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: 36px;
+  align-items: start;
+}
+.toc {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 13px;
+}
+.tocLabel {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-4);
+  margin-bottom: 8px;
+}
+.toc button {
+  font: inherit;
+  text-align: left;
+  color: var(--fg-3);
+  background: none;
+  border: none;
+  padding: 5px 0;
+  line-height: 1.4;
+  cursor: pointer;
+}
+.toc button:hover {
+  color: var(--fg-1);
+}
+
+.body {
+  max-width: 720px;
+  color: var(--fg-2);
+  font-size: 14.5px;
+  line-height: 1.7;
+}
+.section {
+  margin-bottom: 28px;
+}
+.section h3 {
+  color: var(--fg-1);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0 0 10px;
+}
+.section p {
+  margin: 0 0 12px;
+}
+.section ul {
+  margin: 0 0 12px;
+  padding-left: 20px;
+}
+.section li {
+  margin-bottom: 6px;
+}
+.section strong {
+  color: var(--fg-1);
+  font-weight: 600;
+}
+.section a {
+  color: var(--accent);
+}
+.callout {
+  margin: 4px 0 14px;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  color: var(--fg-1);
+}
+
+/* LegalLink: a button that reads as an inline link. */
+.link {
+  font: inherit;
+  color: var(--accent);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.link:hover {
+  text-decoration-thickness: 2px;
+}
+
+@media (max-width: 860px) {
+  .scroll {
+    padding: 0 16px 32px;
+  }
+  .head {
+    padding-left: 16px;
+  }
+  .cols {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+  .toc {
+    position: static;
+  }
+  .intro h2 {
+    font-size: 24px;
+  }
+}

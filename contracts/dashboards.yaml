@@ -1,0 +1,687 @@
+openapi: 3.0.3
+info:
+  title: ALIBI — Dashboards domain
+  version: 0.1.0
+  description: >
+    Named dashboards over ONE folder (flow 4.4), and the pool of charts pinned from the chat (flow
+    3.4) that they are filled from.
+
+    The distinction between the two is the point of this domain:
+      - A **saved chart** is a snapshot. It preserves the answer exactly as it was, because it is the
+      record of something the user read.
+      - A **dashboard** is the opposite. It stores the IDEA of each chart — `sql` + a data-less
+      Vega-Lite spec — and `GET /dashboards/{dashboardId}/charts/{chartId}/data` re-runs that SQL
+      against the folder's Parquet AS IT IS NOW, every time the board is opened. If the file changes,
+      the board changes.
+
+    That is why a dashboard is scoped to a folder and not to a fixed set of datasets: the folder is
+    resolved on every read, just as in a conversation, so a file added later is seen by every chart
+    without re-pinning anything.
+
+    One data request PER CHART, not one per board: a chart whose query stopped running (a renamed
+    column) marks its own card and the rest of the board keeps working, and no single request has to
+    fit N queries inside API Gateway's 29 s ceiling.
+
+    Source of truth for shapes: `frontend/src/types/index.ts`. The result/chart schemas are
+    replicated here so the file is valid standalone; Redocly's bundle deduplicates them against the
+    shared components.
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: dashboards
+    description: "Named boards over one folder, and the charts pinned from the chat."
+
+paths:
+  /dashboards:
+    get:
+      tags: [dashboards]
+      operationId: listDashboards
+      summary: "The user's boards."
+      responses:
+        '200':
+          description: "Boards, most recently modified first."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Dashboard' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [dashboards]
+      operationId: createDashboard
+      summary: "Creates a board over a folder."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateDashboardRequest' }
+      responses:
+        '201':
+          description: "Board created, with no charts yet."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: "The folder does not exist."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /dashboards/{dashboardId}:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+    get:
+      tags: [dashboards]
+      operationId: getDashboard
+      summary: "A board with its charts (specs, WITHOUT data)."
+      description: >
+        Returns each chart's idea and its position in the grid. The data is requested separately, one
+        per chart, against `/charts/{chartId}/data`.
+      responses:
+        '200':
+          description: "The requested board."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [dashboards]
+      operationId: updateDashboard
+      summary: "Renames a board."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateDashboardRequest' }
+      responses:
+        '200':
+          description: "Board updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Dashboard' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [dashboards]
+      operationId: deleteDashboard
+      summary: "Deletes a board and its charts."
+      responses:
+        '204':
+          description: "Board deleted."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dashboards/{dashboardId}/available-charts:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+    get:
+      tags: [dashboards]
+      operationId: listAvailableCharts
+      summary: "Charts pinned from conversations over the board's folder."
+      description: >
+        The pool the board is filled from. It only includes charts that can be REBUILT: one pinned
+        before Module C has no `sql`+`spec` pair, so on a board that recomputes it would be a card that
+        can never refresh.
+      responses:
+        '200':
+          description: "Charts available to add."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SavedChart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dashboards/{dashboardId}/charts:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+    post:
+      tags: [dashboards]
+      operationId: addDashboardChart
+      summary: "Adds a chart to the board, from a pin or from an answer."
+      description: >
+        COPIES the chart's idea (`sql` + `spec`) onto the board; it does not reference it. A board
+        should not break because somebody tidied up their pins, and the two diverge the moment either
+        one is renamed.
+
+        The new chart is placed AT THE VERY BOTTOM. No AI decides the placement: it stacks and the user
+        drags.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AddDashboardChartRequest' }
+      responses:
+        '201':
+          description: "Chart added, with its initial position."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardChart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: "The board, the pin or the source message does not exist."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: >
+            Both sources were named or neither was, the answer has no chart, or the saved chart cannot be
+            rebuilt.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: no_chart_to_add, message: 'That answer has no chart to add.' }
+
+  /dashboards/{dashboardId}/charts/{chartId}:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+      - $ref: '#/components/parameters/ChartIdPath'
+    delete:
+      tags: [dashboards]
+      operationId: removeDashboardChart
+      summary: "Removes a chart from the board."
+      responses:
+        '204':
+          description: "Chart removed."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dashboards/{dashboardId}/charts/{chartId}/data:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+      - $ref: '#/components/parameters/ChartIdPath'
+    get:
+      tags: [dashboards]
+      operationId: getDashboardChartData
+      summary: "Re-runs a chart's query against the current data."
+      description: >
+        Always 200 if the chart exists. A query that stopped running comes back as `status: "failed"`
+        with a message for the card, not as an error status: a board is many independent claims about
+        one folder, and one of them going stale is not a failure of the request.
+      responses:
+        '200':
+          description: "Fresh rows, or the reason that chart could not run."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardChartData' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /dashboards/{dashboardId}/layout:
+    parameters:
+      - $ref: '#/components/parameters/DashboardIdPath'
+    put:
+      tags: [dashboards]
+      operationId: setDashboardLayout
+      summary: "Persists the grid after a drag or a resize."
+      description: >
+        In bulk and not per chart: dragging one card compacts the others, so the grid returns the state
+        of the BOARD. Sending it as N requests would leave the board in a shape nobody chose if one of
+        them failed.
+
+        A chart the layout does not mention stays where it was.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateLayoutRequest' }
+      responses:
+        '200':
+          description: "Board with the positions already saved."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/DashboardDetail' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /datasets/{id}/charts:
+    parameters:
+      - $ref: '#/components/parameters/DatasetIdPath'
+    get:
+      tags: [dashboards]
+      operationId: listSavedCharts
+      summary: "Saved charts of a dataset's dashboard."
+      responses:
+        '200':
+          description: "Saved charts of that dataset."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SavedChart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    post:
+      tags: [dashboards]
+      operationId: saveChart
+      summary: "Pins a chart to the dataset's dashboard."
+      description: >
+        Saves the chart from an assistant answer (referenced by `messageId`) with the `chartType` chosen
+        at that moment. The server copies the message's `result` onto the saved chart.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveChartRequest' }
+      responses:
+        '201':
+          description: "Chart saved."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedChart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: "The dataset or the source message does not exist."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /charts/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [dashboards]
+      operationId: getSavedChart
+      summary: "Detail of a saved chart (modal 4.4)."
+      responses:
+        '200':
+          description: "The requested saved chart."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedChart' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [dashboards]
+      operationId: removeSavedChart
+      summary: Remove a chart from the dashboard.
+      responses:
+        '204':
+          description: "Chart removed from the dashboard."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    DatasetIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+    DashboardIdPath:
+      name: dashboardId
+      in: path
+      required: true
+      schema: { type: string }
+    ChartIdPath:
+      name: chartId
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: "The session token is missing or invalid."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthorized, message: 'Sign in to continue.' }
+    NotFound:
+      description: "The resource does not exist."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: not_found, message: 'The resource was not found.' }
+    ValidationError:
+      description: "The request body failed validation."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: validation_error, message: 'Check the highlighted fields.' }
+
+  schemas:
+    ChartType:
+      type: string
+      enum: [bar, line, scatter, pie, histogram, heatmap, table]
+
+    CategoricalDatum:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: number }
+
+    ScatterPoint:
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        label: { type: string }
+
+    ChartData:
+      description: "Normalised chart payload; the shape depends on the family."
+      oneOf:
+        - $ref: '#/components/schemas/CategoricalChartData'
+        - $ref: '#/components/schemas/ScatterChartData'
+        - $ref: '#/components/schemas/HeatmapChartData'
+      discriminator:
+        propertyName: kind
+        mapping:
+          categorical: '#/components/schemas/CategoricalChartData'
+          scatter: '#/components/schemas/ScatterChartData'
+          heatmap: '#/components/schemas/HeatmapChartData'
+
+    CategoricalChartData:
+      type: object
+      required: [kind, data]
+      properties:
+        kind: { type: string, enum: [categorical] }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/CategoricalDatum' }
+
+    ScatterChartData:
+      type: object
+      required: [kind, points]
+      properties:
+        kind: { type: string, enum: [scatter] }
+        points:
+          type: array
+          items: { $ref: '#/components/schemas/ScatterPoint' }
+
+    HeatmapChartData:
+      type: object
+      required: [kind, rows, cols, values]
+      properties:
+        kind: { type: string, enum: [heatmap] }
+        rows:
+          type: array
+          items: { type: string }
+        cols:
+          type: array
+          items: { type: string }
+        values:
+          type: array
+          items:
+            type: array
+            items: { type: number }
+        normalize:
+          type: string
+          enum: [global, column]
+
+    Insight:
+      type: object
+      required: [label, value, delta]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        delta: { type: string }
+
+    ResultColumn:
+      type: object
+      required: [key, label, align]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        align: { type: string, enum: [left, num] }
+
+    ResultTable:
+      type: object
+      required: [columns, rows]
+      properties:
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ResultColumn' }
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              oneOf:
+                - { type: string }
+                - { type: number }
+
+    ChartColumn:
+      type: object
+      description: "Replica of `chat.yaml#/components/schemas/ChartColumn`."
+      required: [name, dtype, cardinality]
+      properties:
+        name: { type: string }
+        dtype: { type: string, enum: [quantitative, temporal, nominal] }
+        cardinality: { type: integer }
+
+    ChartSpec:
+      type: object
+      description: "Replica of `chat.yaml#/components/schemas/ChartSpec`."
+      required: [chartType, spec, columns]
+      properties:
+        chartType: { $ref: '#/components/schemas/ChartType' }
+        spec:
+          type: object
+          additionalProperties: true
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ChartColumn' }
+        source: { type: string, enum: [model, model_retry], default: model }
+
+    # The dashboards domain stores a snapshot WITH a chart. Since Module C
+    # (2026-08-07) the chart arrives in `chart` — the Vega-Lite spec —, which is
+    # the field that gets rendered. `chartTitle`/`autoChartType`/`chartData`/
+    # `insights` describe the pre-Module-C render union: nothing writes them any
+    # more, and they stay here so a chart saved before that change is still read
+    # and drawn with the old SVG components.
+    SavedChartResult:
+      type: object
+      required: [naturalResponse, sql, table, rowCount, rowsLabel]
+      properties:
+        naturalResponse: { type: string }
+        insights:
+          type: array
+          items: { $ref: '#/components/schemas/Insight' }
+        sql: { type: string }
+        table: { $ref: '#/components/schemas/ResultTable' }
+        rowCount: { type: integer }
+        rowsLabel: { type: string }
+        chart:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/ChartSpec' }]
+        chartTitle: { type: string }
+        autoChartType: { $ref: '#/components/schemas/ChartType' }
+        chartData: { $ref: '#/components/schemas/ChartData' }
+
+    SavedChart:
+      type: object
+      required: [id, datasetId, datasetName, question, chartType, savedAt, result]
+      properties:
+        id: { type: string }
+        datasetId:
+          type: string
+          description: "Dataset this chart belongs to (dashboards are per source)."
+        datasetName: { type: string }
+        question:
+          type: string
+          description: "Natural-language question that generated it."
+        chartType:
+          allOf: [{ $ref: '#/components/schemas/ChartType' }]
+          description: "Type chosen when it was saved."
+        savedAt: { type: string, format: date }
+        result: { $ref: '#/components/schemas/SavedChartResult' }
+
+    ChartLayout:
+      description: >
+        Where a chart lives, in react-grid-layout's 24-column space (the `lg` breakpoint — the only one
+        persisted; narrower ones are derived client-side). It is stored on the server and not in the
+        browser because a board is something the user ARRANGED, not a per-device preference: it has to
+        look the same on the laptop where they built it and on the screen where they present it.
+      type: object
+      required: [x, y, w, h]
+      properties:
+        x: { type: integer, minimum: 0 }
+        y: { type: integer, minimum: 0 }
+        w: { type: integer, minimum: 1, maximum: 24 }
+        h: { type: integer, minimum: 2 }
+
+    DashboardChart:
+      description: >
+        One chart on the board: how to rebuild it, never what it showed.
+
+        `sql` + `spec`, with no rows and no narrative. The narrative is left out on purpose: it
+        described the numbers as they were when the question was asked, so on a board that recomputes it
+        would be a confident sentence about stale data underneath a fresh chart.
+      type: object
+      required: [id, title, sql, chartType, spec, layout]
+      properties:
+        id: { type: string }
+        title:
+          type: string
+          description: "Header of the card. It comes from the spec's title, and is editable."
+        question:
+          type: string
+          description: "The question that originated it. Provenance; it is never re-asked."
+        sql:
+          type: string
+          description: >
+            Re-run on every open, and re-validated beforehand against the read-only guardrail: it was safe
+            when it was saved, and the tables it names may have changed.
+        chartType: { $ref: '#/components/schemas/ChartType' }
+        spec:
+          type: object
+          additionalProperties: true
+          description: "Vega-Lite v5, without `data`."
+        layout: { $ref: '#/components/schemas/ChartLayout' }
+
+    Dashboard:
+      type: object
+      required: [id, name, folderId, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        folderId:
+          type: string
+          description: "The folder it runs over. Always exactly one."
+        folderName: { type: string }
+        chartCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    DashboardDetail:
+      allOf:
+        - $ref: '#/components/schemas/Dashboard'
+        - type: object
+          properties:
+            charts:
+              type: array
+              items: { $ref: '#/components/schemas/DashboardChart' }
+
+    CreateDashboardRequest:
+      type: object
+      required: [name, folderId]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+        folderId: { type: string }
+
+    UpdateDashboardRequest:
+      type: object
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 120 }
+
+    AddDashboardChartRequest:
+      description: >
+        Exactly one of `savedChartId` (from the pool) or `messageId` (from the board's own chat). Both
+        resolve to the same thing: a `sql`+`spec` pair copied onto the board.
+      type: object
+      properties:
+        savedChartId: { type: string }
+        messageId: { type: string }
+        title:
+          type: string
+          description: "Overrides the spec's title if the user renamed it when adding it."
+
+    UpdateLayoutRequest:
+      type: object
+      required: [layout]
+      properties:
+        layout:
+          type: object
+          description: "chartId → position."
+          additionalProperties: { $ref: '#/components/schemas/ChartLayout' }
+
+    DashboardChartData:
+      description: >
+        The result of re-running ONE chart's query, now.
+
+        `status` is explicit because a stale chart is the EXPECTED failure on a board that recomputes:
+        the folder's files change, and a query that named a column somebody renamed stops running. The
+        card says so and the rest of the board carries on.
+      type: object
+      required: [chartId, status]
+      properties:
+        chartId: { type: string }
+        status: { type: string, enum: [ok, failed] }
+        table: { $ref: '#/components/schemas/ResultTable' }
+        rowCount: { type: integer }
+        message:
+          type: string
+          description: >
+            With `failed`: what to show on the card, in the user's language.
+
+    SaveChartRequest:
+      type: object
+      required: [messageId, chartType]
+      properties:
+        messageId:
+          type: string
+          description: "Assistant message whose chart is being saved."
+        chartType: { $ref: '#/components/schemas/ChartType' }
+        findingIndex:
+          type: integer
+          minimum: 0
+          nullable: true
+          description: "Which finding of a multi-finding answer to pin; omitted, the lead one."
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+security:
+  - bearerAuth: []

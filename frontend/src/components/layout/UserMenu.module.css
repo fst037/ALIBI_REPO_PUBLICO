@@ -1,0 +1,102 @@
+.wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Profile pill — avatar + name, links to /cuenta. */
+.profile {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  padding: 4px 13px 4px 4px;
+  border-radius: 999px;
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  color: var(--fg-1);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  text-decoration: none;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              transform var(--dur-fast) var(--ease);
+}
+.profile:hover { background: var(--glass-fill-hover); border-color: var(--glass-border-bright); }
+.profile:active { transform: translateY(1px); }
+.profile :global(.avatar) { width: 27px; height: 27px; font-size: 11px; }
+
+.name {
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Logout — glass icon button that turns danger on hover. */
+.logout {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              color var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.logout:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
+.logout:active { transform: translateY(1px); }
+
+/* Confirmation modal body. */
+.confirm {
+  padding: 30px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.confirmIco {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger-soft);
+  color: var(--danger);
+  margin-bottom: 16px;
+}
+.confirmTitle {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 7px;
+}
+.confirmText {
+  font-size: 13px;
+  color: var(--fg-3);
+  line-height: 1.5;
+  max-width: 320px;
+  margin-bottom: 22px;
+}
+.confirmActions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.confirmActions > * { flex: 1; justify-content: center; }
+
+/* Destructive confirm button — scoped under .confirmActions to win over .btn-glass. */
+.confirmActions .danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.confirmActions .danger:hover {
+  background: rgba(255, 122, 133, 0.22);
+  border-color: var(--danger);
+  color: var(--danger);
+}

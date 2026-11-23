@@ -1,0 +1,120 @@
+openapi: 3.0.3
+info:
+  title: ALIBI API
+  version: 0.1.0
+  description: >
+    ALIBI's modular-monolith API. This is the spec-first root that composes the 5 domains (auth,
+    ingestion, chat, visualization, dashboards) by $ref. It is bundled to `contracts/openapi.yaml`
+    (Redocly) to feed Prism (mock) and Orval (the frontend's typed client). Do not edit the
+    generated artefacts: the per-domain files are the source of truth.
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: auth
+    description: "Registration, login, email verification (6-digit code by email), password reset."
+  - name: account
+    description: "Account and workspace data for the authenticated user."
+  - name: plans
+    description: "Catalogue of subscription plans (Free/Pro, ARS, VAT excluded)."
+  - name: billing
+    description: "Subscription and its overage, tokenized payment method and cost ledger."
+  - name: notifications
+    description: "User notifications (cross-cutting, user-scoped resource)."
+  - name: datasets
+    description: "Zero-ETL ingestion, workspace datasets and their inferred schema."
+  - name: uploads
+    description: "File upload and tracking of the asynchronous processing (Module B)."
+  - name: folders
+    description: "Folders (projects) that group datasets; many-to-many relationship."
+  - name: conversations
+    description: "Conversations and the prepare/execute message cycle."
+  - name: library
+    description: "Conversation history and saved queries."
+  - name: exports
+    description: "Export of a result or chart to CSV, PNG or PDF."
+  - name: dashboards
+    description: "Saved charts per dataset and their detail."
+
+security:
+  - bearerAuth: []
+
+paths:
+  # ---- auth.yaml ----
+  /auth/register: { $ref: './auth.yaml#/paths/~1auth~1register' }
+  /auth/login: { $ref: './auth.yaml#/paths/~1auth~1login' }
+  /auth/logout: { $ref: './auth.yaml#/paths/~1auth~1logout' }
+  /auth/me: { $ref: './auth.yaml#/paths/~1auth~1me' }
+  /auth/verify-email: { $ref: './auth.yaml#/paths/~1auth~1verify-email' }
+  /auth/verify-email/resend: { $ref: './auth.yaml#/paths/~1auth~1verify-email~1resend' }
+  /auth/google: { $ref: './auth.yaml#/paths/~1auth~1google' }
+  /auth/password-reset/request: { $ref: './auth.yaml#/paths/~1auth~1password-reset~1request' }
+  /auth/password-reset/confirm: { $ref: './auth.yaml#/paths/~1auth~1password-reset~1confirm' }
+  /account: { $ref: './auth.yaml#/paths/~1account' }
+  /plans: { $ref: './auth.yaml#/paths/~1plans' }
+  /plans/{planId}: { $ref: './auth.yaml#/paths/~1plans~1{planId}' }
+  /subscription: { $ref: './auth.yaml#/paths/~1subscription' }
+  /subscription/upgrade: { $ref: './auth.yaml#/paths/~1subscription~1upgrade' }
+  /billing/checkout: { $ref: './auth.yaml#/paths/~1billing~1checkout' }
+  /billing/checkout/confirm: { $ref: './auth.yaml#/paths/~1billing~1checkout~1confirm' }
+  /billing/payment-method: { $ref: './auth.yaml#/paths/~1billing~1payment-method' }
+  /billing/overage: { $ref: './auth.yaml#/paths/~1billing~1overage' }
+  /billing/ledger: { $ref: './auth.yaml#/paths/~1billing~1ledger' }
+  /billing/ledger/export: { $ref: './auth.yaml#/paths/~1billing~1ledger~1export' }
+  /notifications: { $ref: './auth.yaml#/paths/~1notifications' }
+  /notifications/unread-count: { $ref: './auth.yaml#/paths/~1notifications~1unread-count' }
+  /notifications/{id}/read: { $ref: './auth.yaml#/paths/~1notifications~1{id}~1read' }
+  /notifications/read-all: { $ref: './auth.yaml#/paths/~1notifications~1read-all' }
+
+  # ---- ingestion.yaml ----
+  /uploads: { $ref: './ingestion.yaml#/paths/~1uploads' }
+  /uploads/{id}: { $ref: './ingestion.yaml#/paths/~1uploads~1{id}' }
+  /uploads/{id}/retry: { $ref: './ingestion.yaml#/paths/~1uploads~1{id}~1retry' }
+  /datasets: { $ref: './ingestion.yaml#/paths/~1datasets' }
+  /datasets/{id}: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}' }
+  /datasets/{id}/schema: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1schema' }
+  /datasets/{id}/preview: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1preview' }
+  /datasets/{id}/quality: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1quality' }
+  /datasets/{id}/cleaning-preview: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1cleaning-preview' }
+  /datasets/{id}/update-targets: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1update-targets' }
+  /datasets/{id}/update-preview: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1update-preview' }
+  /datasets/{id}/update: { $ref: './ingestion.yaml#/paths/~1datasets~1{id}~1update' }
+  /folders: { $ref: './ingestion.yaml#/paths/~1folders' }
+  /folders/{id}: { $ref: './ingestion.yaml#/paths/~1folders~1{id}' }
+  /folders/{id}/datasets: { $ref: './ingestion.yaml#/paths/~1folders~1{id}~1datasets' }
+  /folders/{id}/datasets/{datasetId}: { $ref: './ingestion.yaml#/paths/~1folders~1{id}~1datasets~1{datasetId}' }
+
+  # ---- chat.yaml ----
+  /conversations: { $ref: './chat.yaml#/paths/~1conversations' }
+  /conversations/suggestions: { $ref: './chat.yaml#/paths/~1conversations~1suggestions' }
+  /conversations/{id}: { $ref: './chat.yaml#/paths/~1conversations~1{id}' }
+  /conversations/{id}/messages/prepare: { $ref: './chat.yaml#/paths/~1conversations~1{id}~1messages~1prepare' }
+  /conversations/{id}/messages: { $ref: './chat.yaml#/paths/~1conversations~1{id}~1messages' }
+  /conversations/{id}/runs: { $ref: './chat.yaml#/paths/~1conversations~1{id}~1runs' }
+  /conversations/{id}/runs/{runId}: { $ref: './chat.yaml#/paths/~1conversations~1{id}~1runs~1{runId}' }
+  /history: { $ref: './chat.yaml#/paths/~1history' }
+  /saved-queries: { $ref: './chat.yaml#/paths/~1saved-queries' }
+  /saved-queries/{id}: { $ref: './chat.yaml#/paths/~1saved-queries~1{id}' }
+
+  # ---- visualization.yaml ----
+  /exports: { $ref: './visualization.yaml#/paths/~1exports' }
+
+  # ---- dashboards.yaml ----
+  /dashboards: { $ref: './dashboards.yaml#/paths/~1dashboards' }
+  /dashboards/{dashboardId}: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}' }
+  /dashboards/{dashboardId}/available-charts: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}~1available-charts' }
+  /dashboards/{dashboardId}/charts: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}~1charts' }
+  /dashboards/{dashboardId}/charts/{chartId}: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}~1charts~1{chartId}' }
+  /dashboards/{dashboardId}/charts/{chartId}/data: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}~1charts~1{chartId}~1data' }
+  /dashboards/{dashboardId}/layout: { $ref: './dashboards.yaml#/paths/~1dashboards~1{dashboardId}~1layout' }
+  /datasets/{id}/charts: { $ref: './dashboards.yaml#/paths/~1datasets~1{id}~1charts' }
+  /charts/{id}: { $ref: './dashboards.yaml#/paths/~1charts~1{id}' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT

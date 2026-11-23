@@ -1,0 +1,367 @@
+.ing {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.top {
+  height: 58px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 26px;
+  border-bottom: 1px solid var(--glass-border);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-1);
+  text-decoration: none;
+}
+.body {
+  flex: 1;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 44px 32px;
+}
+.inner {
+  width: 100%;
+  max-width: 560px;
+}
+.inner.wide {
+  max-width: 820px;
+}
+.h {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0;
+  text-align: center;
+}
+.sub {
+  color: var(--fg-2);
+  text-align: center;
+  margin: 10px 0 30px;
+  font-size: 14.5px;
+}
+.bigDrop {
+  border: 1.5px dashed var(--glass-border-bright);
+  border-radius: var(--r-lg);
+  padding: 56px 32px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  background: none;
+  width: 100%;
+  font-family: var(--font-sans);
+  color: inherit;
+}
+.bigDrop:hover,
+.bigDrop.drag {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.bigDropIco {
+  width: 68px;
+  height: 68px;
+  border-radius: 18px;
+  background: var(--glass-fill-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  box-shadow: 0 6px 26px -8px var(--accent-glow);
+}
+.dropFormats {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 4px;
+}
+.limitNote {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin-top: 18px;
+  color: var(--fg-3);
+  font-size: 12.5px;
+}
+.sampleLink {
+  text-align: center;
+  margin-top: 22px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+/* uploading */
+.upCard {
+  padding: 26px;
+}
+.upFile {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.upFileIco {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--r-sm);
+  background: var(--ok-soft);
+  color: var(--ok);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.upPhases {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 22px;
+}
+.upPhase {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 13.5px;
+  color: var(--fg-3);
+  transition: color var(--dur) var(--ease);
+}
+.upPhase.active { color: var(--fg-1); }
+.upPhase.done { color: var(--fg-2); }
+.phaseIco {
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: var(--glass-fill-strong);
+  color: var(--fg-4);
+}
+.upPhase.done .phaseIco { background: var(--accent-soft); color: var(--accent); }
+.upPhase.active .phaseIco { background: transparent; }
+
+/* schema */
+.schSummary {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.schStat {
+  padding: 12px 16px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  flex: 1;
+  min-width: 120px;
+}
+.statV {
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.statL {
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.schTable {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.schHead,
+.schRow {
+  display: grid;
+  grid-template-columns: 26px 1.4fr 1fr 1.4fr;
+  gap: 14px;
+  align-items: center;
+  padding: 12px 16px;
+}
+.schHead {
+  background: var(--glass-fill-strong);
+  border-bottom: 1px solid var(--glass-border);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+}
+.schRow {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.schRow:last-child { border-bottom: none; }
+.schRow.off { opacity: 0.4; }
+.miniField {
+  background: var(--canvas-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  transition: border-color var(--dur) var(--ease);
+}
+.miniField:focus { border-color: var(--accent-line); }
+select.miniField { appearance: none; cursor: pointer; }
+.schSample {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--fg-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.incToggle {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  border: 1.5px solid var(--glass-border-bright);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: transparent;
+  transition: all var(--dur) var(--ease);
+  background: none;
+}
+.incToggle.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.schFoot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 22px;
+}
+
+/* error / done */
+.errCard {
+  padding: 30px;
+  text-align: center;
+}
+.errIco {
+  width: 60px;
+  height: 60px;
+  border-radius: 16px;
+  background: var(--danger-soft);
+  color: var(--danger);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 18px;
+}
+.doneIco {
+  width: 64px;
+  height: 64px;
+  border-radius: 18px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 20px;
+  box-shadow: 0 6px 30px -6px var(--accent-glow);
+}
+
+/* ---- Module B: warnings, multi-table tabs, rename, preview ---- */
+
+/* Non-fatal notes from the pipeline. Deliberately warn-toned, not danger:
+   nothing failed — the system is telling the user what it assumed. */
+.warnBox {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  margin-bottom: 18px;
+  border: 1px solid color-mix(in srgb, var(--warn) 28%, transparent);
+  background: color-mix(in srgb, var(--warn) 8%, transparent);
+  border-radius: var(--r-md);
+}
+.warnRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--fg-2);
+}
+.warnRow svg { flex: none; margin-top: 2px; color: var(--warn); }
+
+/* One tab per table found in the file. Only rendered when there is more than
+   one, so a plain CSV never shows a tab strip of one. */
+.tableTabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 18px;
+  overflow-x: auto;
+  padding-bottom: 4px;
+}
+.tableTab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 9px 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.tableTab:hover { border-color: var(--accent-line); }
+.tableTab.tabOn {
+  border-color: var(--accent);
+  color: var(--fg-1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+/* A confirmed table stays visible and reachable — the user may want to look
+   again — but reads as settled. */
+.tableTab.tabDone { color: var(--ok); }
+.tableTab.tabDone svg { color: var(--ok); }
+.tabMeta {
+  font-size: 11px;
+  color: var(--fg-4);
+  white-space: nowrap;
+}
+
+.nameRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.nameRow .miniField { max-width: 320px; }
+
+/* Shown only when inference renamed a column, so the user can still tie it
+   back to the file they uploaded. */
+.srcName {
+  font-size: 10.5px;
+  color: var(--fg-4);
+  margin-top: 4px;
+}
+
+.previewWrap { margin-top: 22px; }

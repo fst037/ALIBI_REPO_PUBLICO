@@ -1,0 +1,270 @@
+name: Deploy backend
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "backend/**"
+      - ".github/workflows/backend-deploy.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: backend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Build wheels for the Lambda runtime's platform, not the runner's.
+      # The python3.12 runtime is Amazon Linux 2023 (GLIBC 2.34); a plain
+      # install grabs the runner's native wheels, which can need a newer GLIBC
+      # than Lambda has (the bcrypt import error that broke the first deploy).
+      # Two --platform tags are needed because the compiled deps publish under
+      # different manylinux tags — bcrypt only ships manylinux_2_28, psycopg
+      # only manylinux2014 — and both load fine on GLIBC 2.34.
+      - name: Install dependencies into package/ (Lambda deployment layout)
+        run: |
+          pip install -r requirements.txt --target package \
+            --platform manylinux_2_28_x86_64 --platform manylinux2014_x86_64 \
+            --only-binary=:all: --python-version 3.12
+          cp -r app package/
+          # alembic/ + alembic.ini: needed at runtime by app/db/migrate.py's
+          # `upgrade_to_head()` (the migrate-invoke path in app/main.py's
+          # handler) — not just a local dev tool.
+          cp -r alembic package/
+          cp alembic.ini package/
+
+      # The backend Lambda is in a VPC with no NAT gateway (see
+      # backend/terraform/modules/api-lambda) — its only outbound route is the S3 Gateway
+      # Endpoint, which doesn't carry the plain HTTPS traffic DuckDB's
+      # `INSTALL httpfs` needs to fetch the extension from DuckDB's server.
+      # That download has to happen here instead, where there's real internet,
+      # using the exact duckdb build just unpacked into package/ so the
+      # extension's version always matches the runtime library it loads into
+      # (DuckDB enforces an exact version match). See app/services/query.py's
+      # `_connect` for the runtime side (`LOAD` by path, not `INSTALL`).
+      - name: Bundle the DuckDB httpfs extension (no NAT gateway to fetch it at runtime)
+        run: |
+          mkdir -p package/duckdb_extensions
+          python3 - <<'PY'
+          import glob
+          import shutil
+          import sys
+
+          sys.path.insert(0, "package")
+          import duckdb
+
+          con = duckdb.connect()
+          con.execute("SET extension_directory='/tmp/duckdb_ext_cache'")
+          con.execute("INSTALL httpfs")
+
+          matches = glob.glob("/tmp/duckdb_ext_cache/**/httpfs.duckdb_extension", recursive=True)
+          if not matches:
+              raise SystemExit("httpfs.duckdb_extension not found after INSTALL")
+          shutil.copy(matches[0], "package/duckdb_extensions/httpfs.duckdb_extension")
+          print(f"[httpfs] bundled from {matches[0]}")
+          PY
+
+      - name: Run tests
+        run: |
+          # requirements-dev.txt alone omits the ingest parsers (pandas,
+          # openpyxl, ...) — see requirements-ingest.txt's header comment.
+          # With ALIBI_JOB_RUNNER defaulting to "thread" (app/core/config.py),
+          # the ingestion pipeline runs in-process under the test client, so
+          # the test venv needs both files, same as local dev.
+          pip install -r requirements-dev.txt -r requirements-ingest.txt
+          pytest
+
+      # Runs on package/, never on the venv tests just ran against, so it
+      # cannot affect test correctness. Two categories, both inert at
+      # runtime:
+      #   - debug symbols in native .so files (duckdb's alone is ~58 MB
+      #     unstripped) — `strip` removes symbol tables, never code, so this
+      #     changes nothing observable; a crash just loses a
+      #     stack-trace-friendly symbol name, which Lambda's logs don't
+      #     surface anyway.
+      #   - type stubs (*.pyi), bytecode caches, and bundled test suites —
+      #     shipped in some wheels (numpy in particular) but never imported
+      #     by running code.
+      - name: Trim package for Lambda's size limit
+        run: |
+          BEFORE_MB=$(du -sm package | cut -f1)
+          find package -name '*.so' -exec strip --strip-unneeded {} + 2>/dev/null || true
+          find package -name '__pycache__' -type d -prune -exec rm -rf {} +
+          find package -name '*.pyc' -delete
+          find package -name '*.pyi' -delete
+          find package -type d -name 'tests' -prune -exec rm -rf {} +
+          AFTER_MB=$(du -sm package | cut -f1)
+          echo "Trimmed package: ${BEFORE_MB} MB -> ${AFTER_MB} MB"
+
+      - name: Zip deployment package
+        run: |
+          cd package
+          zip -r ../backend.zip . -x '*.pyc'
+
+      # Lambda's limit is on the UNZIPPED size, and it is a hard 250 MB — the
+      # API rejects the update with a message that does not name the number.
+      # Removing LiteLLM brought this back from 403 MB to roughly 233, which is
+      # what let the function return to a zip at all — but 233 of 250 is ~17 MB of headroom, and the last
+      # dependency of any size consumed all of it. So this fails the build,
+      # here, with the actual figure, rather than letting a deploy fail opaquely
+      # or an oversized package reach production.
+      #
+      # If this trips: the honest options are dropping a dependency, moving the
+      # work to Module B's processor (already a container), or putting the API
+      # back on a container image. Raising the threshold is not one of them.
+      - name: Check the package fits Lambda's 250 MB unzipped limit
+        run: |
+          SIZE_MB=$(du -sm package | cut -f1)
+          echo "Unzipped package: ${SIZE_MB} MB (Lambda's hard limit is 250 MB)"
+          if [ "$SIZE_MB" -gt 240 ]; then
+            echo "::error::Package is ${SIZE_MB} MB, over the 240 MB guard rail (Lambda's hard limit is 250 MB)."
+            du -sm package/* | sort -rn | head -20
+            exit 1
+          fi
+          if [ "$SIZE_MB" -gt 220 ]; then
+            echo "::warning::Package is ${SIZE_MB} MB — under 250 MB but with little room left."
+          fi
+
+      # Role ARN, Lambda name, and code bucket are auto-populated by
+      # .github/workflows/infra-deploy.yml (unified Terraform root at
+      # terraform/envs/dev) as repository variables: AWS_CI_DEPLOY_ROLE_ARN,
+      # AWS_BACKEND_LAMBDA_NAME, AWS_BACKEND_CODE_BUCKET.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Upload package to S3
+        run: |
+          aws s3 cp backend.zip "s3://${{ vars.AWS_BACKEND_CODE_BUCKET }}/code/backend.zip"
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_BACKEND_LAMBDA_NAME }}" \
+            --s3-bucket "${{ vars.AWS_BACKEND_CODE_BUCKET }}" \
+            --s3-key "code/backend.zip"
+
+      # Module B stage 2 runs the SAME zip with a different handler
+      # (app.ingest.lambda_handler.committer_handler), so it is updated from
+      # the object just uploaded — there is no second build, and the two
+      # cannot drift apart. Skipped when the ingest pipeline isn't deployed.
+      - name: Update ingestion committer code
+        if: vars.AWS_INGEST_COMMITTER_NAME != ''
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_INGEST_COMMITTER_NAME }}" \
+            --s3-bucket "${{ vars.AWS_BACKEND_CODE_BUCKET }}" \
+            --s3-key "code/backend.zip"
+
+      # The LLM bridge (app/llm_bridge.py) runs the SAME zip with a different
+      # handler, same reasoning as the committer step above — one build, no
+      # drift between the two. Skipped when text2sql_enabled is off.
+      - name: Update LLM bridge code
+        if: vars.AWS_LLM_BRIDGE_FUNCTION_NAME != ''
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_LLM_BRIDGE_FUNCTION_NAME }}" \
+            --s3-bucket "${{ vars.AWS_BACKEND_CODE_BUCKET }}" \
+            --s3-key "code/backend.zip"
+
+      # The answer-run worker (app/run_worker.py): the same zip again, with the
+      # handler that executes a run outside API Gateway's 29 s. Skipped until
+      # infra-deploy.yml has created it.
+      - name: Update answer-run worker code
+        if: vars.AWS_RUN_WORKER_FUNCTION_NAME != ''
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_RUN_WORKER_FUNCTION_NAME }}" \
+            --s3-bucket "${{ vars.AWS_BACKEND_CODE_BUCKET }}" \
+            --s3-key "code/backend.zip"
+
+      # Module B stage 1 is a container image, not a zip: pandas + pyarrow +
+      # pdfplumber + openpyxl exceed Lambda's 250 MB unzipped limit, while the
+      # image limit is 10 GB. Built here rather than by Terraform for the same
+      # reason the API zip is — and on Ubuntu,
+      # so there is no Windows cross-compile problem.
+      - name: Build and push the ingestion processor image
+        if: vars.AWS_INGEST_ECR_URL != ''
+        run: |
+          REGISTRY="$(echo "${{ vars.AWS_INGEST_ECR_URL }}" | cut -d/ -f1)"
+          aws ecr get-login-password | docker login --username AWS --password-stdin "$REGISTRY"
+          # Tagged with the commit SHA so a deployment is traceable to a
+          # revision, and `latest` so a manual redeploy has a stable target.
+          docker build -f Dockerfile.processor \
+            -t "${{ vars.AWS_INGEST_ECR_URL }}:${{ github.sha }}" \
+            -t "${{ vars.AWS_INGEST_ECR_URL }}:latest" .
+          docker push "${{ vars.AWS_INGEST_ECR_URL }}:${{ github.sha }}"
+          docker push "${{ vars.AWS_INGEST_ECR_URL }}:latest"
+
+      - name: Update ingestion processor image
+        if: vars.AWS_INGEST_PROCESSOR_NAME != ''
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ vars.AWS_INGEST_PROCESSOR_NAME }}" \
+            --image-uri "${{ vars.AWS_INGEST_ECR_URL }}:${{ github.sha }}"
+
+      # The database stops itself after an idle hour (terraform/modules/
+      # rds-autostop), and migrations need it up. Invoking its power Lambda
+      # with an empty payload starts it only if it is stopped, so this is a
+      # no-op on an awake database and ~5-10 min on a sleeping one. Skipped
+      # until terraform/envs/database has created the function.
+      - name: Wake the database
+        run: |
+          fn="alibi-db-power-dev"
+          if ! aws lambda get-function --function-name "$fn" > /dev/null 2>&1; then
+            echo "$fn not deployed yet; assuming the database is always on"
+            exit 0
+          fi
+          # Re-invoked each round: one caught mid-"stopping" can only be
+          # started once it reaches "stopped".
+          for _ in $(seq 40); do
+            aws lambda invoke --function-name "$fn" wake-response.json > /dev/null
+            cat wake-response.json; echo
+            grep -q '"available"' wake-response.json && exit 0
+            sleep 30
+          done
+          echo "::error::Database did not become available within 20 minutes"
+          exit 1
+
+      # Migrations run inside the (already VPC-attached) Lambda itself, not
+      # from this runner — the RDS instance is private, and this runner has
+      # no network path to it. See app/main.py's `handler`: it recognizes
+      # this exact payload and runs `alembic upgrade head` synchronously
+      # instead of routing to the API via Mangum. Only fires once per
+      # deploy, right here — never on a cold start, so there's no risk of
+      # concurrent invocations racing to run DDL. A no-op (already-applied
+      # migrations) returns cleanly, same as running it twice locally.
+      - name: Run database migrations
+        run: |
+          aws lambda wait function-updated --function-name "${{ vars.AWS_BACKEND_LAMBDA_NAME }}"
+          aws lambda invoke \
+            --function-name "${{ vars.AWS_BACKEND_LAMBDA_NAME }}" \
+            --cli-binary-format raw-in-base64-out \
+            --payload '{"_alibi_migrate": true}' \
+            migrate-response.json > migrate-invoke.json
+          cat migrate-response.json
+          if grep -q '"FunctionError"' migrate-invoke.json; then
+            echo "::error::Migration invoke failed"
+            exit 1
+          fi
+          if ! grep -q '"status": *"migrated"' migrate-response.json; then
+            echo "::error::Migration did not report success"
+            exit 1
+          fi

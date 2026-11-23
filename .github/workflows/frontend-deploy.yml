@@ -1,0 +1,67 @@
+name: Deploy frontend
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - "frontend/**"
+      - ".github/workflows/frontend-deploy.yml"
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: frontend-deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # A failing test stops the deploy, same as backend-deploy.yml's pytest.
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+        env:
+          # "Continuar con Google" — the same OAuth client id the API checks
+          # tokens against (infra-deploy.yml). Unset = the button is not shown.
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.ALIBI_GOOGLE_CLIENT_ID }}
+
+      # Role ARN, bucket name, and CloudFront distribution ID are
+      # auto-populated by .github/workflows/infra-deploy.yml (unified
+      # Terraform root at terraform/envs/dev) as repository variables:
+      # AWS_CI_DEPLOY_ROLE_ARN, AWS_FRONTEND_BUCKET,
+      # AWS_CLOUDFRONT_DISTRIBUTION_ID.
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Sync to S3
+        run: |
+          aws s3 sync dist/ "s3://${{ vars.AWS_FRONTEND_BUCKET }}" --delete
+
+      - name: Invalidate CloudFront cache
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id "${{ vars.AWS_CLOUDFRONT_DISTRIBUTION_ID }}" \
+            --paths "/*"

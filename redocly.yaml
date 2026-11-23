@@ -1,0 +1,22 @@
+# Redocly config — lint + bundle for the ALIBI API contracts.
+# The 5 per-domain files are standalone OpenAPI 3.0.3 docs, joined into
+# contracts/openapi.yaml via `npm run contracts:bundle` (redocly join).
+apis:
+  alibi@v1:
+    root: contracts/openapi.yaml
+
+extends:
+  - recommended
+
+rules:
+  # Relative server URLs (/api/v1) are intentional — the deploy URL is not
+  # baked into the spec; the frontend proxy / API Gateway resolves it.
+  no-server-example.com: off
+  no-empty-servers: off
+  # Every domain repeats the shared Error/ChartType/QueryResult schemas so it
+  # is valid standalone; the join step deduplicates them in the bundle.
+  no-unused-components: warn
+  operation-4xx-response: warn
+  operation-operationId-unique: error
+  operation-operationId: error
+  tags-alphabetical: off

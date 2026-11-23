@@ -1,0 +1,151 @@
+/* ETLite panel on the schema confirmation screen. Sits between the schema
+   table and the preview, and reuses the Disclosure chrome (`.sql-block`). */
+
+.wrap { margin-top: 22px; }
+
+.opt { color: var(--fg-4); font-weight: 400; }
+
+.body {
+  padding: 4px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.intro {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--fg-3);
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--fg-3);
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.secHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.secTitle {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg-1);
+  margin-bottom: 2px;
+}
+
+.keys {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+}
+.key { font-family: var(--font-mono); font-size: 12px; }
+.keyOn {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.col {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  padding: 12px 14px;
+}
+.colHead {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.colName { font-size: 13px; color: var(--fg-1); }
+.kind {
+  font-size: 11px;
+  color: var(--fg-4);
+}
+.issue {
+  font-size: 11.5px;
+  color: var(--warn);
+  background: var(--warn-soft);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+.controls {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 10px 12px;
+  align-items: end;
+}
+.ctl {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  position: relative;
+}
+.wideCtl { grid-column: span 2; }
+.ctlLab {
+  font-size: 11px;
+  color: var(--fg-3);
+}
+.field {
+  background: var(--canvas-2);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-sm);
+  padding: 7px 10px;
+  color: var(--fg-1);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  outline: none;
+  width: 100%;
+  transition: border-color var(--dur) var(--ease);
+}
+.field:focus { border-color: var(--accent-line); }
+select.field { appearance: none; cursor: pointer; }
+.fill {
+  font-size: 11.5px;
+  color: var(--accent);
+}
+.switchCtl { padding-bottom: 6px; }
+
+.result {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 13px;
+  color: var(--fg-2);
+  padding-top: 12px;
+  border-top: 1px solid var(--glass-border);
+}
+.removed { color: var(--fg-3); }
+
+.error {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--danger);
+  padding: 10px 12px;
+  border-radius: var(--r-md);
+  background: var(--danger-soft);
+}
+.error svg { flex: none; margin-top: 2px; }
+
+@media (max-width: 560px) {
+  .wideCtl { grid-column: auto; }
+}

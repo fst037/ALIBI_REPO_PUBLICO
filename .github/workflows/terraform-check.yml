@@ -1,0 +1,69 @@
+name: terraform-check
+
+# Syntax/format check for the Terraform, runnable from any branch.
+#
+# Exists because `infra-deploy.yml` goes straight from `terraform init` to
+# `terraform apply` — there is no plan or validate step — so until now the only
+# way to find out whether the HCL was even parseable was to run a real apply.
+# That is a poor feedback loop for anyone without Terraform installed locally
+# (and it cannot be installed on the dev machine behind the Zscaler proxy).
+#
+# Deliberately requests NO AWS credentials and uses `-backend=false`: it never
+# reads or writes state, never contacts AWS, and cannot change a single
+# resource. Safe to run on a work-in-progress branch as often as you like.
+#
+# What it does NOT cover: `lifecycle.precondition` blocks and anything else
+# evaluated against real variable values — those are plan-time, so they only
+# surface during `infra-deploy.yml`. Format and syntax errors are what this
+# catches, which is the bulk of what breaks an apply.
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    paths:
+      - "**/*.tf"
+      - ".github/workflows/terraform-check.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          # Same version infra-deploy.yml pins, so a config that passes here
+          # cannot fail the real apply for a version-specific reason.
+          terraform_version: "1.9.8"
+
+      # fmt is scoped to the three trees the unified root composes. ML/ is left
+      # out of the FORMAT check only — pre-existing formatting there would turn
+      # this red for reasons unrelated to the change under review, which is the
+      # fastest way to teach everyone to ignore it. It is still validated below.
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff terraform backend/terraform frontend/terraform
+
+      - name: Validate the unified root (backend + frontend + ML core)
+        working-directory: terraform/envs/dev
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      - name: Validate the database root
+        working-directory: terraform/envs/database
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate
+
+      # Added 2026-09-07. This root spent months referencing four module blocks
+      # whose state had been migrated away, and nothing caught it because
+      # nothing ever validated it. Every variable here has a default, so
+      # validate runs clean without any of the cross-root inputs.
+      - name: Validate the ML root
+        working-directory: ML/terraform/envs/dev
+        run: |
+          terraform init -backend=false -input=false
+          terraform validate

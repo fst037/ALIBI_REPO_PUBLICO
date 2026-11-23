@@ -1,0 +1,1117 @@
+openapi: 3.0.3
+info:
+  title: "ALIBI — Chat domain (orchestrator)"
+  version: 0.1.0
+  description: >
+    Conversational orchestrator: one continuous conversation per data source. A query's cycle has
+    two phases so it respects the product flow (transparent SQL 2.2 + non-skippable cost estimate
+    4.3.1):
+      1. `POST /conversations/{id}/messages/prepare` generates the SQL, validates it against the
+      read-only guardrail (sqlglot AST) and estimates the cost. It returns a draft or a guardrail
+      rejection. The same endpoint re-validates hand-edited SQL.
+      2. `POST /conversations/{id}/messages` executes the confirmed draft and returns the assistant's
+      answer (table + SQL + chart) plus the real cost receipt (4.3.2).
+
+    Includes history (4.1) and saved queries (an entity of its own). Source of truth for shapes:
+    `frontend/src/types/index.ts`.
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: conversations
+    description: "Conversations, suggestions and the prepare/execute message cycle."
+  - name: library
+    description: "Conversation history and saved queries."
+
+paths:
+  /conversations:
+    get:
+      tags: [conversations]
+      operationId: listConversations
+      summary: "Lists conversations (supports a bounded 'recent' view)."
+      parameters:
+        - name: recent
+          in: query
+          description: "If true, returns only the most recent ones (use with `limit`)."
+          schema: { type: boolean }
+        - name: limit
+          in: query
+          description: "Maximum number of conversations to return."
+          schema: { type: integer, minimum: 1, default: 6 }
+      responses:
+        '200':
+          description: "Workspace conversations."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [conversations]
+      operationId: createConversation
+      summary: "Opens a conversation over 1+ datasets."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateConversationRequest' }
+      responses:
+        '201':
+          description: "Conversation created (no messages yet)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: >
+            `mode: deep` on a plan whose `limits.answerModes` lacks it (Free answers Quick only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: plan_upgrade_required, message: 'Las respuestas en modo Profundo están disponibles en el plan Pro.' }
+        '404':
+          description: "One of the datasets does not exist or is not active."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /conversations/suggestions:
+    get:
+      tags: [conversations]
+      operationId: getSuggestions
+      summary: "Suggested questions for the active dataset."
+      parameters:
+        - name: datasetId
+          in: query
+          description: "Dataset the suggestions are contextualised for."
+          schema: { type: string }
+      responses:
+        '200':
+          description: "Question suggestions."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Suggestion' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /conversations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    get:
+      tags: [conversations]
+      operationId: getConversation
+      summary: "A conversation with all of its messages."
+      responses:
+        '200':
+          description: "The requested conversation."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [conversations]
+      operationId: updateConversation
+      summary: "Renames a conversation or marks it as favorite."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateConversationRequest' }
+      responses:
+        '200':
+          description: "Conversation updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Conversation' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: >
+            `mode: deep` on a plan whose `limits.answerModes` lacks it (Free answers Quick only).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: plan_upgrade_required, message: 'Las respuestas en modo Profundo están disponibles en el plan Pro.' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+    delete:
+      tags: [conversations]
+      operationId: deleteConversation
+      summary: "Deletes a conversation and all of its messages."
+      responses:
+        '204':
+          description: "Conversation deleted."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{id}/messages/prepare:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [conversations]
+      operationId: prepareMessage
+      summary: "Generates SQL + validates the guardrail + estimates cost (pre-execution)."
+      description: >
+        Takes a natural-language question (`question`) or hand-edited SQL (`sql`). It
+        generates/validates the SQL, runs the read-only guardrail and estimates the cost. It returns an
+        executable draft, or a guardrail rejection (200 with `status: blocked`) if the question tries to
+        modify data. Edited SQL that does not validate against the AST (sqlglot) returns 422.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PrepareMessageRequest' }
+      responses:
+        '200':
+          description: "Draft prepared, or query blocked by the guardrail."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PrepareResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: >
+            The edited SQL failed AST validation (invalid syntax or a disallowed construct). It does not
+            apply to NL questions, which are rejected with a 200 `status: blocked`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: sql_validation_failed, message: 'The edited SQL is invalid or not allowed.' }
+
+  /conversations/{id}/runs:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [conversations]
+      operationId: startRun
+      summary: "Starts answering a question asynchronously; poll the returned run."
+      description: >
+        Records the run as `queued` and returns at once; a worker answers it outside API Gateway's
+        29 s request ceiling (the agent harness). Poll
+        `GET /conversations/{id}/runs/{runId}` until `status` is `done` (with `message` or `guard`)
+        or `failed` (with `error`, the same code/message the synchronous endpoints answer with).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/StartRunRequest' }
+      responses:
+        '202':
+          description: "Run accepted and queued."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: >
+            The plan does not allow it: `plan_limit_reached` / `overage_cap_reached` (monthly quota),
+            or `plan_upgrade_required` when `mode` is `deep` on a plan whose `limits.answerModes` lacks it
+            (Free answers Quick only), or `deep_outside_quota` when `mode` is `deep` past the monthly quota (extra
+            queries are answered Quick). A conversation whose default is Deep is answered Quick in both cases instead.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: plan_upgrade_required, message: 'Las respuestas en modo Profundo están disponibles en el plan Pro.' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '422':
+          description: "Neither or both of `question` and `sql` were sent."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /conversations/{id}/runs/{runId}:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+      - name: runId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [conversations]
+      operationId: getRun
+      summary: "A run's status, its steps so far, and its outcome once finished."
+      responses:
+        '200':
+          description: "The run."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Run' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /conversations/{id}/messages:
+    parameters:
+      - $ref: '#/components/parameters/ConversationIdPath'
+    post:
+      tags: [conversations]
+      operationId: executeMessage
+      summary: "Executes the confirmed draft → answer + cost receipt."
+      description: >
+        Executes the prepared draft (referenced by `draftId`) against the database and returns the
+        assistant's message (table + SQL + auto chart) together with the real cost receipt.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExecuteMessageRequest' }
+      responses:
+        '201':
+          description: "Query executed; assistant's answer + receipt."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExecuteMessageResponse' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404':
+          description: "The draft does not exist or expired (prepare again)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: >
+            The confirmed SQL could not be executed over the conversation's tables (non-existent column,
+            incompatible types, table not materialised yet). The error is returned instead of sample rows:
+            showing demo data for a query the user confirmed over their own data would be indistinguishable
+            from a real answer.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: execution_failed, message: 'The query failed: Binder Error: Referenced column "x" not found.' }
+        '402':
+          description: "The plan's row/query quota was exceeded."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: quota_exceeded, message: 'The query exceeded the allowed row limit. Try narrowing the range or adding a filter.' }
+        '408':
+          description: "The query exceeded the time limit."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: query_timeout, message: 'The query exceeded the time limit. Try narrowing the date range or adding a filter.' }
+        '503':
+          description: "Could not connect to the database."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: db_unavailable, message: 'Could not connect to the database. Try again in a few seconds.' }
+
+  /history:
+    get:
+      tags: [library]
+      operationId: listHistory
+      summary: "Conversation history grouped by recency."
+      responses:
+        '200':
+          description: "History groups."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/HistoryGroup' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /saved-queries:
+    get:
+      tags: [library]
+      operationId: listSavedQueries
+      summary: "Saved queries (supports free-text search)."
+      parameters:
+        - name: q
+          in: query
+          description: "Free-text filter over the question or the dataset name."
+          schema: { type: string }
+      responses:
+        '200':
+          description: Saved queries.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SavedQuery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    post:
+      tags: [library]
+      operationId: saveQuery
+      summary: "Saves a query to the library."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SaveQueryRequest' }
+      responses:
+        '201':
+          description: "Query saved."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SavedQuery' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /saved-queries/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    delete:
+      tags: [library]
+      operationId: deleteSavedQuery
+      summary: "Removes a saved query from the library."
+      responses:
+        '204':
+          description: "Query removed from the library."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    ConversationIdPath:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: "The session token is missing or invalid."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthorized, message: 'Sign in to continue.' }
+    NotFound:
+      description: "The resource does not exist."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: not_found, message: 'The resource was not found.' }
+    ValidationError:
+      description: "The request body failed validation."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: validation_error
+              message: 'Check the highlighted fields.'
+
+  schemas:
+    # ---- Charts ----
+    ChartType:
+      type: string
+      enum: [bar, line, scatter, pie, histogram, heatmap, table]
+
+    CategoricalDatum:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: number }
+
+    ScatterPoint:
+      type: object
+      required: [x, y]
+      properties:
+        x: { type: number }
+        y: { type: number }
+        label: { type: string }
+
+    ChartData:
+      description: "Normalised chart payload; the shape depends on the family."
+      oneOf:
+        - $ref: '#/components/schemas/CategoricalChartData'
+        - $ref: '#/components/schemas/ScatterChartData'
+        - $ref: '#/components/schemas/HeatmapChartData'
+      discriminator:
+        propertyName: kind
+        mapping:
+          categorical: '#/components/schemas/CategoricalChartData'
+          scatter: '#/components/schemas/ScatterChartData'
+          heatmap: '#/components/schemas/HeatmapChartData'
+
+    CategoricalChartData:
+      type: object
+      required: [kind, data]
+      properties:
+        kind: { type: string, enum: [categorical] }
+        data:
+          type: array
+          items: { $ref: '#/components/schemas/CategoricalDatum' }
+
+    ScatterChartData:
+      type: object
+      required: [kind, points]
+      properties:
+        kind: { type: string, enum: [scatter] }
+        points:
+          type: array
+          items: { $ref: '#/components/schemas/ScatterPoint' }
+
+    HeatmapChartData:
+      type: object
+      required: [kind, rows, cols, values]
+      properties:
+        kind: { type: string, enum: [heatmap] }
+        rows:
+          type: array
+          items: { type: string }
+        cols:
+          type: array
+          items: { type: string }
+        values:
+          type: array
+          items:
+            type: array
+            items: { type: number }
+        normalize:
+          type: string
+          enum: [global, column]
+
+    # ---- Query result ----
+    Insight:
+      type: object
+      required: [label, value, delta]
+      properties:
+        label: { type: string }
+        value: { type: string }
+        delta: { type: string }
+
+    ResultColumn:
+      type: object
+      required: [key, label, align]
+      properties:
+        key: { type: string }
+        label: { type: string }
+        align: { type: string, enum: [left, num] }
+
+    ResultTable:
+      type: object
+      required: [columns, rows]
+      properties:
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ResultColumn' }
+        rows:
+          type: array
+          items:
+            type: object
+            additionalProperties:
+              oneOf:
+                - { type: string }
+                - { type: number }
+
+    ChartColumn:
+      description: >
+        One column of the result exactly as it was described to Module C.
+
+        NOTHING in the UI reads it today. It existed so the chart-type chips could re-encode the spec
+        locally; the chips were removed, because the model picks the form and offering an override
+        invites the user to contradict a decision they have less information to make. It stays as a
+        record of what the model received — which is the part that explains why it chose that chart —
+        and a saved chart keeps it as a historical snapshot the rows may no longer reproduce.
+
+        There is no `ordinal`: an ordinal column is a nominal one whose order matters, and that cannot
+        be inferred from a results table. The model can write `"type": "ordinal"` inside the spec — that
+        is where the judgement belongs, because it can read the labels.
+      type: object
+      required: [name, dtype, cardinality]
+      properties:
+        name:
+          type: string
+          description: "RAW name of the column — the one that appears in `table.rows`."
+        dtype:
+          type: string
+          enum: [quantitative, temporal, nominal]
+        cardinality:
+          type: integer
+          description: "Distinct non-null values across the whole result, not across the sample."
+
+    ChartSpec:
+      description: >
+        Module C's answer: a Vega-Lite v5 specification for one result, validated against the official
+        JSON Schema and against the real column names before being returned.
+
+        It carries NO data. `spec` has no `data` key and must not gain one in transport: the browser
+        injects `result.table.rows`, which it already has. Sending the rows twice would double the
+        response of a large result and — more importantly — a `data` block coming from the model would
+        be numbers nobody queried.
+
+        There is no `source: fallback`. If the model cannot produce a valid specification, the answer
+        has no chart: `chart` is null and the user gets the explanation and the table.
+      type: object
+      required: [chartType, spec, columns]
+      properties:
+        chartType:
+          allOf: [{ $ref: '#/components/schemas/ChartType' }]
+          description: >
+            Which of the 6 types it is. Never `table`: "no chart" is expressed with `chart: null`.
+        spec:
+          type: object
+          additionalProperties: true
+          description: "The Vega-Lite v5 document, without `data`."
+        columns:
+          type: array
+          items: { $ref: '#/components/schemas/ChartColumn' }
+        source:
+          type: string
+          enum: [model, model_retry]
+          default: model
+          description: >
+            Whether the accepted spec was the first proposal or the one from the critique retry.
+            Traceability: a run that always needs the second attempt looks identical to a clean one from the
+            outside.
+
+    QueryResult:
+      type: object
+      description: >
+        One chat answer: the explanation, the SQL, the table and a chart.
+
+        `chart` is Module C's Vega-Lite specification, generated by `orchestrator/nodes/visualize.py`
+        from the executed rows. It is OPTIONAL and is often absent, and that is a design state, not a
+        degradation: either the model judged that no chart adds anything (a single total, a single row),
+        or it could not produce a spec that validates. Both cases are `chart: null` and the answer is
+        still complete.
+
+        There is deliberately no template-based fallback. A chart type chosen from the shape of the rows
+        is exactly the deterministic classifier deleted on 2026-08-02, being a second opinion that would
+        end up contradicting the model over the same table.
+
+        `autoChartType`, `chartData`, `chartTitle` and `insights` are not coming back: they belonged to
+        that classifier and to a render union of its own. They still exist on `SavedChartResult` so
+        charts saved before the change stay readable.
+      required: [naturalResponse, sql, table, rowCount, rowsLabel]
+      properties:
+        naturalResponse:
+          type: string
+          description: "Short natural-language explanation (2.3)."
+        sql:
+          type: string
+          description: "Generated SQL (collapsible panel 2.2)."
+        table: { $ref: '#/components/schemas/ResultTable' }
+        rowCount: { type: integer }
+        rowsLabel: { type: string, example: '1,243 rows' }
+        chart:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/ChartSpec' }]
+          description: "Module C's chart, or null if there is no valid one."
+        findings:
+          type: array
+          items: { $ref: '#/components/schemas/Finding' }
+          description: >
+            Every finding, in order, when the agent harness found two or more. Empty for a
+            one-finding answer, which keeps exactly the shape above. The top-level `sql`/`table`/`chart`
+            always mirror the first finding.
+        trail:
+          type: array
+          items: { $ref: '#/components/schemas/TrailStep' }
+          description: "The queries behind the answer — context and insight, failures included."
+
+    Finding:
+      type: object
+      description: "One result the user should see, with its own sentence."
+      required: [text, question, sql, table, rowCount, rowsLabel]
+      properties:
+        text: { type: string, description: "One or two sentences about this finding." }
+        question: { type: string, description: "What the finding is about, as the planner asked it." }
+        sql: { type: string }
+        table: { $ref: '#/components/schemas/ResultTable' }
+        rowCount: { type: integer }
+        rowsLabel: { type: string }
+        chart:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/ChartSpec' }]
+
+    TrailStep:
+      type: object
+      description: "One step the agent harness took (a query, a look at a result, a chart), for \"How I got here\"."
+      required: [label, status]
+      properties:
+        label: { type: string, description: "What the step did, in the user's language." }
+        purpose:
+          type: string
+          nullable: true
+          enum: [context, insight]
+        thought:
+          type: string
+          nullable: true
+          description: "Why the planner took this step: its own one-sentence note, in the user's language."
+        tool:
+          type: string
+          nullable: true
+          enum: [sql, peek, describe, chart]
+          description: "What the step called: sql = Module A wrote and ran a query; peek/describe = a look at a result already held; chart = Module C."
+        model:
+          type: string
+          nullable: true
+          description: "Who served the call, for the user (the fine-tuned adapter or a Bedrock model id)."
+        detail:
+          type: string
+          nullable: true
+          description: "The outcome of a step that is not a query, in the user's language: the chart drawn, or why none."
+        question: { type: string, nullable: true }
+        hints:
+          type: string
+          nullable: true
+          description: "The planner's BIRD-style hints sent with the question to Module A (its trained `-- External knowledge:` slot)."
+        sql: { type: string, nullable: true }
+        rowCount: { type: integer, nullable: true }
+        status: { type: string, enum: [done, failed] }
+        error: { type: string, nullable: true }
+
+    SavedChartResult:
+      description: >
+        A `QueryResult` as the dashboards domain saved it, with a chart. It is a historical record, so
+        the shape has to survive whether or not it is written today: what is saved now carries the empty
+        values below, because there is no chart in the answer to save.
+      allOf:
+        - $ref: '#/components/schemas/QueryResult'
+        - type: object
+          properties:
+            insights:
+              type: array
+              items: { $ref: '#/components/schemas/Insight' }
+            chartTitle: { type: string }
+            autoChartType: { $ref: '#/components/schemas/ChartType' }
+            chartData: { $ref: '#/components/schemas/ChartData' }
+
+    # ---- Messages ----
+    MessageRole:
+      type: string
+      enum: [user, assistant, guard, system]
+
+    UserMessage:
+      type: object
+      required: [id, role, text, at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [user] }
+        text: { type: string }
+        at: { type: string, format: date-time }
+
+    AssistantMessage:
+      type: object
+      required: [id, role, question, result, at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [assistant] }
+        question: { type: string }
+        result: { $ref: '#/components/schemas/QueryResult' }
+        at: { type: string, format: date-time }
+
+    GuardMessage:
+      description: "Read-only guardrail rejection (a write/DDL attempt was detected)."
+      type: object
+      required: [id, role, question, at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [guard] }
+        question: { type: string }
+        at: { type: string, format: date-time }
+
+    SystemMessage:
+      description: "Inline system notice, e.g. \"Source changed to …\"."
+      type: object
+      required: [id, role, text, at]
+      properties:
+        id: { type: string }
+        role: { type: string, enum: [system] }
+        text: { type: string }
+        at: { type: string, format: date-time }
+
+    Message:
+      oneOf:
+        - $ref: '#/components/schemas/UserMessage'
+        - $ref: '#/components/schemas/AssistantMessage'
+        - $ref: '#/components/schemas/GuardMessage'
+        - $ref: '#/components/schemas/SystemMessage'
+      discriminator:
+        propertyName: role
+        mapping:
+          user: '#/components/schemas/UserMessage'
+          assistant: '#/components/schemas/AssistantMessage'
+          guard: '#/components/schemas/GuardMessage'
+          system: '#/components/schemas/SystemMessage'
+
+    # ---- Conversation ----
+    ConversationSourceType:
+      type: string
+      description: >
+        What a conversation runs over. ALWAYS a folder.
+
+        `dataset` (one file) and `datasets` (an explicit selection of several) were removed: the scope
+        Module A sees is exactly one folder chosen by the user, never a loose table nor everything they
+        have uploaded. Asking about a single file is a folder with one file.
+
+        The folder is the right unit because it is the only one resolved on EVERY read: a file uploaded
+        later joins an already-open conversation, whereas an explicit list was frozen when it was
+        opened.
+      enum: [folder]
+
+    ConversationSource:
+      type: object
+      required: [type, id, name]
+      properties:
+        type: { $ref: '#/components/schemas/ConversationSourceType' }
+        id:
+          type: string
+          description: >
+            Id of the dataset or of the folder. With `datasets` there is no single entity to reference, so
+            it is empty — the effective list is `Conversation.datasetIds`.
+        name:
+          type: string
+          description: >
+            Name of the dataset or folder for the canvas header; with `datasets`, a summary along the lines
+            of "3 datasets".
+
+    Conversation:
+      type: object
+      required: [id, title, datasetIds, createdAt, messages]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        source: { $ref: '#/components/schemas/ConversationSource' }
+        datasetIds:
+          type: array
+          description: >
+            Datasets that are actually queryable, and the tables Module A receives in the prompt. With
+            `source.type: dataset` it is a single element; with `datasets`, the selection saved when the
+            conversation was opened; with `folder`, the folder's datasets resolved at read time.
+          items: { type: string }
+        createdAt: { type: string, format: date }
+        favorite:
+          type: boolean
+          default: false
+          description: "Marked by the user from the history."
+        mode:
+          allOf: [{ $ref: '#/components/schemas/RunMode' }]
+          default: quick
+          description: "The depth the next questions are answered at, unless one names its own."
+        messages:
+          type: array
+          items: { $ref: '#/components/schemas/Message' }
+
+    CreateConversationRequest:
+      type: object
+      description: >
+        Open a conversation over a folder. `folderId` is the only entry point.
+
+        `sourceType`/`sourceId` are accepted as aliases so an old client keeps working, but a request
+        that names datasets directly is rejected (422) rather than reinterpreted: the scope a question
+        is answered over is the thing that most benefits from being unambiguous.
+      properties:
+        folderId: { type: string }
+        sourceType: { $ref: '#/components/schemas/ConversationSourceType' }
+        sourceId:
+          type: string
+          description: "Alias for `folderId` (old client)."
+        mode:
+          allOf: [{ $ref: '#/components/schemas/RunMode' }]
+          default: quick
+          description: "The conversation's default depth."
+
+    UpdateConversationRequest:
+      type: object
+      description: >
+        Partial patch: at least one of `title`, `favorite` or `mode`. An empty body is rejected (422)
+        rather than counted as an update that did nothing.
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        favorite: { type: boolean }
+        mode: { $ref: '#/components/schemas/RunMode' }
+
+    SuggestionIcon:
+      type: string
+      enum: [trend, calendar, percent, compare]
+
+    Suggestion:
+      type: object
+      required: [icon, text]
+      properties:
+        icon: { $ref: '#/components/schemas/SuggestionIcon' }
+        text: { type: string }
+
+    # ---- Prepare / execute ----
+    PrepareMessageRequest:
+      description: "Exactly one of `question` (NL) or `sql` (hand-edited)."
+      oneOf:
+        - $ref: '#/components/schemas/PrepareFromQuestion'
+        - $ref: '#/components/schemas/PrepareFromSql'
+
+    PrepareFromQuestion:
+      type: object
+      required: [question]
+      properties:
+        question: { type: string, minLength: 1 }
+
+    PrepareFromSql:
+      type: object
+      required: [sql]
+      properties:
+        sql:
+          type: string
+          minLength: 1
+          description: "SQL edited by the user, to be re-validated against the guardrail."
+
+    PrepareResult:
+      oneOf:
+        - $ref: '#/components/schemas/PreparedMessage'
+        - $ref: '#/components/schemas/GuardResult'
+      discriminator:
+        propertyName: status
+        mapping:
+          prepared: '#/components/schemas/PreparedMessage'
+          blocked: '#/components/schemas/GuardResult'
+
+    PreparedMessage:
+      type: object
+      required: [status, draftId, sql, estimate]
+      properties:
+        status: { type: string, enum: [prepared] }
+        draftId:
+          type: string
+          description: "Reference to the draft to execute in phase 2."
+        sql:
+          type: string
+          description: "Generated/validated SQL, ready to execute."
+        estimate: { $ref: '#/components/schemas/CostEstimate' }
+
+    GuardResult:
+      description: "The query was blocked by the read-only guardrail (this is not a transport error)."
+      type: object
+      required: [status, question, message]
+      properties:
+        status: { type: string, enum: [blocked] }
+        question: { type: string }
+        message:
+          type: string
+          example: 'This query was blocked because it modifies data. ALIBI only allows reads.'
+
+    CostEstimate:
+      description: >
+        Pre-execution estimate (4.3.1). `available: false` when it could not be estimated — execution is
+        not blocked by that.
+      type: object
+      required: [available]
+      properties:
+        available: { type: boolean }
+        estimatedRows: { type: integer, nullable: true }
+        usd: { type: number, nullable: true }
+        ars:
+          type: number
+          nullable: true
+          description: "Conversion from USD; the FX source is an open infrastructure decision."
+
+    ExecuteMessageRequest:
+      type: object
+      required: [draftId]
+      properties:
+        draftId:
+          type: string
+          description: "Draft prepared and confirmed in the cost modal."
+
+    ExecuteMessageResponse:
+      type: object
+      required: [message, receipt]
+      properties:
+        message: { $ref: '#/components/schemas/AssistantMessage' }
+        receipt: { $ref: '#/components/schemas/CostReceipt' }
+
+    StartRunRequest:
+      description: "A natural-language question, or hand-written SQL — exactly one."
+      type: object
+      properties:
+        question: { type: string, minLength: 1 }
+        sql: { type: string, minLength: 1 }
+        mode:
+          allOf: [{ $ref: '#/components/schemas/RunMode' }]
+          description: >
+            This question only. Omitted, the conversation's own `mode` applies — so one question can be
+            asked Deep (or Quick) without changing the conversation's default.
+
+    RunMode:
+      description: "Quick (few steps) or Deep (more steps, bigger synthesis model). Deep is a Pro feature: see `PlanLimits.answerModes`."
+      type: string
+      enum: [quick, deep]
+
+    RunStep:
+      type: object
+      required: [id, label, status, startedAt]
+      properties:
+        id: { type: string }
+        label: { type: string, description: "What the step is doing, in the user's language." }
+        status: { type: string, enum: [running, done, failed] }
+        purpose:
+          type: string
+          nullable: true
+          enum: [context, insight]
+          description: "context = asked so the model understands the data; insight = a finding for the user."
+        question:
+          type: string
+          nullable: true
+          description: "The question the step put to the data, as the planner phrased it for Module A."
+        hints:
+          type: string
+          nullable: true
+          description: "The planner's BIRD-style hints sent with the question to Module A (its trained `-- External knowledge:` slot)."
+        thought:
+          type: string
+          nullable: true
+          description: "Why the planner took this step: its own one-sentence note, in the user's language."
+        tool:
+          type: string
+          nullable: true
+          enum: [sql, peek, describe, chart]
+          description: "What the step called: sql = Module A wrote and ran a query; peek/describe = a look at a result already held; chart = Module C."
+        model:
+          type: string
+          nullable: true
+          description: "Who served the call, for the user (the fine-tuned adapter or a Bedrock model id)."
+        detail:
+          type: string
+          nullable: true
+          description: "The outcome of a step that is not a query, in the user's language: the chart drawn, or why none."
+        sql: { type: string, nullable: true }
+        rowCount: { type: integer, nullable: true }
+        error: { type: string, nullable: true }
+        startedAt: { type: string }
+        finishedAt: { type: string, nullable: true }
+
+    RunError:
+      type: object
+      required: [code, message]
+      properties:
+        code: { type: string }
+        message: { type: string }
+
+    Run:
+      description: >
+        One question answered asynchronously. Ends `done` with `message` (an answer) or `guard`
+        (refused), or `failed` with `error`.
+      type: object
+      required: [id, conversationId, question, isSql, mode, status, steps, createdAt, updatedAt]
+      properties:
+        id: { type: string }
+        conversationId: { type: string }
+        question: { type: string, description: "The question, or the SQL when `isSql`." }
+        isSql: { type: boolean }
+        mode: { $ref: '#/components/schemas/RunMode' }
+        status: { type: string, enum: [queued, running, done, failed] }
+        steps:
+          type: array
+          items: { $ref: '#/components/schemas/RunStep' }
+        message:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/AssistantMessage' }]
+        guard:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/GuardResult' }]
+        receipt:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/CostReceipt' }]
+        error:
+          type: object
+          nullable: true
+          allOf: [{ $ref: '#/components/schemas/RunError' }]
+        createdAt: { type: string }
+        updatedAt: { type: string }
+
+    CostReceipt:
+      description: "Real cost incurred (4.3.2). Its breakdown lives in the cost ledger (auth/billing domain)."
+      type: object
+      required: [rows, usd, ars]
+      properties:
+        rows: { type: integer }
+        usd: { type: number }
+        ars:
+          type: number
+          description: "Conversion from USD; the FX source is an open infrastructure decision."
+
+    # ---- Library ----
+    SavedQuery:
+      type: object
+      required: [id, question, datasetId, datasetName, date, chartType]
+      properties:
+        id: { type: string }
+        question: { type: string }
+        datasetId: { type: string }
+        datasetName: { type: string }
+        date: { type: string, format: date }
+        chartType: { $ref: '#/components/schemas/ChartType' }
+
+    SaveQueryRequest:
+      type: object
+      required: [question, datasetId, chartType]
+      properties:
+        question: { type: string, minLength: 1 }
+        datasetId: { type: string }
+        chartType: { $ref: '#/components/schemas/ChartType' }
+
+    HistoryItem:
+      type: object
+      required: [id, title, source, questionCount, time, chartType, favorite]
+      properties:
+        id: { type: string }
+        title: { type: string }
+        source:
+          type: string
+          description: "Dataset name or \"N datasets\"."
+        questionCount: { type: integer }
+        time: { type: string }
+        chartType: { $ref: '#/components/schemas/ChartType' }
+        favorite: { type: boolean }
+
+    HistoryGroup:
+      type: object
+      required: [date, items]
+      properties:
+        date: { type: string }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/HistoryItem' }
+
+    # ---- Error envelope ----
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+security:
+  - bearerAuth: []

@@ -1,0 +1,13 @@
+/* Bottom-right so it never covers the top-right toast stack screens use. */
+.notice {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 300;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}

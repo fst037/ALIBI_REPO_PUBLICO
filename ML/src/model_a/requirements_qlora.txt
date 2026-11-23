@@ -1,0 +1,11 @@
+torch>=2.1.0
+transformers>=4.41,<4.47 # >=4.41: TrainingArguments(eval_strategy=...) was evaluation_strategy before
+peft>=0.11,<0.14
+bitsandbytes>=0.43.0
+trl>=0.9.6,<0.12 # <0.12: SFTTrainer(max_seq_length=, tokenizer=) moved to SFTConfig in 0.12, gone in 0.13
+accelerate>=0.34
+datasets>=2.18.0
+sentencepiece>=0.2.0
+boto3>=1.34
+sqlglot>=23.0
+mlflow>=2.14,<3

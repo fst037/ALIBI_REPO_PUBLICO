@@ -1,0 +1,168 @@
+/* Onboarding — centered carousel + start options. */
+
+.ob {
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  position: relative;
+}
+.obTop {
+  position: absolute;
+  top: 26px;
+  left: 32px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--fg-1);
+  text-decoration: none;
+}
+.obMk {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: linear-gradient(140deg, var(--accent), var(--accent-dim));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-ink);
+  font-weight: 700;
+  font-size: 14px;
+  box-shadow: 0 4px 18px -4px var(--accent-glow);
+}
+.obSkip {
+  position: absolute;
+  top: 26px;
+  right: 32px;
+}
+.obCard {
+  width: 100%;
+  max-width: 560px;
+  text-align: center;
+}
+.obVisual {
+  height: 200px;
+  border-radius: var(--r-lg);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 34px;
+  position: relative;
+  overflow: hidden;
+}
+.obVisual::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(400px 220px at 50% 30%, var(--accent-soft), transparent 65%);
+  pointer-events: none;
+}
+.obBigIco {
+  color: var(--accent);
+  position: relative;
+  z-index: 1;
+  filter: drop-shadow(0 8px 24px var(--accent-glow));
+}
+.obMod {
+  margin-bottom: 12px;
+}
+.obH {
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0;
+  text-wrap: balance;
+}
+.obP {
+  color: var(--fg-2);
+  font-size: 15.5px;
+  margin: 14px auto 0;
+  max-width: 440px;
+  line-height: 1.55;
+  text-wrap: pretty;
+}
+.obDots {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin: 32px 0;
+}
+.obDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--glass-border);
+  transition: all var(--dur) var(--ease);
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+.obDot.on {
+  background: var(--accent);
+  width: 22px;
+}
+.obNav {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+}
+.obStart {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 6px;
+}
+.startOpt {
+  padding: 22px;
+  border-radius: var(--r-lg);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  text-align: left;
+  transition: all var(--dur) var(--ease);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  text-decoration: none;
+  color: inherit;
+}
+.startOpt:hover {
+  background: var(--glass-fill-hover);
+  border-color: var(--accent-line);
+  transform: translateY(-2px);
+}
+.startIco {
+  width: 42px;
+  height: 42px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.startOpt h3 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+.startOpt p {
+  font-size: 12.5px;
+  color: var(--fg-2);
+  margin: 0;
+  line-height: 1.45;
+}
+
+@media (max-width: 560px) {
+  .obStart {
+    grid-template-columns: 1fr;
+  }
+}

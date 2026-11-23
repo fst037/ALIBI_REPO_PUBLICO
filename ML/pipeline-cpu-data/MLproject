@@ -1,0 +1,58 @@
+# MLflow Project for Module A's lightweight CPU/data stages. MLflow Projects
+# scope one environment to one project directory (no per-entry-point
+# override) — this is the "cpu-data" half of the pipeline; see
+# ../pipeline-gpu-train/MLproject for the GPU half (train, test_model).
+# Driven together by ../src/model_a/pipeline/run_pipeline.py.
+#
+# Run a single stage directly:
+#   cd ML/pipeline-cpu-data && mlflow run . --entry-point eda -P output_dir=../data/eda
+
+name: alibi-model-a-cpu-data
+python_env: ../environments/cpu-data-env.yaml
+
+entry_points:
+  download:
+    parameters:
+      output_dir: { type: string, default: "../data/raw" }
+      bird_dir: { type: string, default: "" }
+    command: "python ../src/model_a/pipeline/download.py --output-dir {output_dir} --bird-dir {bird_dir}"
+
+  eda:
+    parameters:
+      output_dir: { type: string, default: "../data/eda" }
+      spider_dir: { type: string, default: "" }
+      bird_dir: { type: string, default: "" }
+      use_spider_hf: { type: string, default: "true" }
+    command: "python ../src/model_a/pipeline/eda.py --output-dir {output_dir} --spider-dir {spider_dir} --bird-dir {bird_dir} --use-spider-hf {use_spider_hf}"
+
+  clean:
+    parameters:
+      output_dir: { type: string, default: "../data/clean/model_a" }
+      spider_dir: { type: string, default: "" }
+      bird_dir: { type: string, default: "" }
+      use_spider_hf: { type: string, default: "true" }
+    command: "python ../src/model_a/pipeline/clean.py --output-dir {output_dir} --spider-dir {spider_dir} --bird-dir {bird_dir} --use-spider-hf {use_spider_hf}"
+
+  preprocess:
+    parameters:
+      clean_dir: { type: string, default: "../data/clean/model_a" }
+      output_dir: { type: string, default: "../data/preprocessed/model_a" }
+      max_schema_tokens: { type: float, default: 2048 }
+    command: "python ../src/model_a/pipeline/preprocess.py --clean-dir {clean_dir} --output-dir {output_dir} --max-schema-tokens {max_schema_tokens}"
+
+  split:
+    parameters:
+      preprocessed_dir: { type: string, default: "../data/preprocessed/model_a" }
+      output_dir: { type: string, default: "../data/processed/model_a" }
+      spider_dir: { type: string, default: "" }
+      seed: { type: float, default: 42 }
+      eval_fraction: { type: float, default: 0.05 }
+    command: "python ../src/model_a/pipeline/split.py --preprocessed-dir {preprocessed_dir} --output-dir {output_dir} --spider-dir {spider_dir} --seed {seed} --eval-fraction {eval_fraction}"
+
+  publish:
+    parameters:
+      model_dir: { type: string, default: "" }
+      run_id: { type: string, default: "" }
+      artifact_s3_uri: { type: string, default: "" }
+      gate_passed: { type: string, default: "false" }
+    command: "python ../src/model_a/pipeline/publish.py --model-dir {model_dir} --run-id {run_id} --artifact-s3-uri {artifact_s3_uri} --gate-passed {gate_passed}"

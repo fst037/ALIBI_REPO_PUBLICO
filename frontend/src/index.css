@@ -1,0 +1,6 @@
+/* App root sizing. Visual theme lives in styles/tokens.css + styles/alibi.css;
+   this file must not redefine tokens, fonts, or colors. */
+
+#root {
+  height: 100%;
+}

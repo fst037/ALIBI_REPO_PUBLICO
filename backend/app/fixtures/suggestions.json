@@ -1,0 +1,18 @@
+[
+  {
+    "icon": "trend",
+    "text": "Top 5 regions by total sales in 2024"
+  },
+  {
+    "icon": "calendar",
+    "text": "Monthly sales trend"
+  },
+  {
+    "icon": "percent",
+    "text": "Share of total sales by region"
+  },
+  {
+    "icon": "compare",
+    "text": "Compare sales this year against last year"
+  }
+]

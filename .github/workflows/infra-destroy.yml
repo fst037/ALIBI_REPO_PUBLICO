@@ -1,0 +1,117 @@
+name: Destroy ALIBI infrastructure (daily teardown)
+
+# Tears down everything cheap to recreate, to stop paying for idle compute
+# overnight. Deliberately NEVER destroys:
+#   - S3 buckets (site/code/datasets/artifacts) — they hold data and are
+#     not force_destroy-enabled, so a mistaken target would fail loudly
+#     rather than delete anything (see terraform/modules/ci-deploy-role's
+#     IAM policy, which also never grants s3:DeleteBucket).
+#   - module.ci_deploy_role — the identity this very workflow authenticates
+#     as; destroying it would lock out every future run.
+#
+# api-lambda and static-site each bundle a data bucket alongside compute
+# resources in one module, so those two use explicit resource addresses
+# instead of whole-module targets. If either module's internals change,
+# update the lists below to match.
+#
+# ML training and inference (module.training / module.inference) are NOT
+# managed by this workflow at all — they were removed from the unified root
+# entirely and stay on ML/terraform/envs/dev, applied/destroyed via
+# ml-deploy.yml / ml-destroy.yml instead (or `terraform destroy
+# -target=module.inference` etc. from your own terminal, same as before).
+
+on:
+  workflow_dispatch:
+    inputs:
+      destroy_backend:
+        description: "Destroy backend compute (Lambda + API Gateway) — code bucket stays"
+        type: boolean
+        default: true
+      destroy_frontend:
+        description: "Destroy frontend CDN (CloudFront) — site bucket stays"
+        type: boolean
+        default: true
+      destroy_ml:
+        description: "Destroy ML ingestion Lambda — buckets/IAM/budget stay. Training/inference are NOT part of this job, see ML/terraform/envs/dev"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: alibi-unified-terraform
+  cancel-in-progress: false
+
+jobs:
+  destroy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+    env:
+      TF_VAR_alert_email: ${{ vars.ALIBI_ALERT_EMAIL }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Build destroy targets
+        id: targets
+        run: |
+          ARGS=""
+
+          if [ "${{ inputs.destroy_backend }}" = "true" ]; then
+            ARGS="$ARGS \
+              -target=module.backend.aws_apigatewayv2_stage.default \
+              -target=module.backend.aws_apigatewayv2_route.default \
+              -target=module.backend.aws_apigatewayv2_integration.lambda \
+              -target=module.backend.aws_apigatewayv2_api.api \
+              -target=module.backend.aws_lambda_permission.apigateway \
+              -target=module.backend.aws_lambda_function.api \
+              -target=module.backend.aws_iam_role_policy_attachment.lambda_basic_execution \
+              -target=module.backend.aws_iam_role.lambda"
+          fi
+
+          if [ "${{ inputs.destroy_frontend }}" = "true" ]; then
+            ARGS="$ARGS \
+              -target=module.frontend.aws_s3_bucket_policy.site \
+              -target=module.frontend.aws_cloudfront_distribution.site \
+              -target=module.frontend.aws_cloudfront_origin_access_control.site"
+          fi
+
+          if [ "${{ inputs.destroy_ml }}" = "true" ]; then
+            ARGS="$ARGS -target=module.ml_ingestion_lambda"
+          fi
+
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          if [ -z "$ARGS" ]; then
+            echo "empty=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "empty=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform destroy
+        # Deliberately does NOT fall back to an untargeted `terraform destroy`
+        # when all three toggles are off — that would destroy the S3 buckets
+        # and module.ci_deploy_role too. No-op instead.
+        if: steps.targets.outputs.empty == 'false'
+        run: terraform destroy -auto-approve ${{ steps.targets.outputs.args }}
+
+      - name: Confirm data buckets and CI role are untouched
+        run: |
+          terraform state show module.ml_storage.aws_s3_bucket.datasets > /dev/null
+          terraform state show module.ci_deploy_role.aws_iam_role.ci > /dev/null
+          echo "data buckets and CI role confirmed present"

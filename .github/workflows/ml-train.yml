@@ -1,0 +1,165 @@
+name: Launch ALIBI Module A training job
+
+# Separate from ml-deploy.yml on purpose: this workflow submits a real,
+# billed SageMaker Training Job (ml.g5.2xlarge on-demand, ~$14-24 for the
+# estimated 6-10h run). Kept out
+# of the routine infra-apply workflow so a real spend can never happen as a
+# side effect of an unrelated infra change.
+#
+# Pre-requisites:
+#   1. infra-deploy.yml with deploy_ml=true, at least once — creates the IAM
+#      roles and buckets and populates the AWS_ML_* repo variables read below.
+#   2. ml-deploy.yml with package_and_upload_code=true — uploads the code
+#      tarball (model_a/ + common/ + requirements.txt) this job runs.
+#   3. Real train/eval JSONL already in S3 (ML/README.md §5, or the MLflow
+#      pipeline's `split` stage) — this workflow does not prepare data.
+#
+# SageMaker is the only training backend; the EC2-spot and RunPod alternatives
+# were removed 2026-09-07 once its quota was approved.
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type LAUNCH to confirm — this starts real, billed GPU training.'
+        required: true
+      run_id:
+        description: 'Training run id (job = model-a-dev-<run_id>). Must be new — SageMaker rejects duplicates. Blank = training_run_id from terraform.tfvars.'
+        required: false
+        default: ''
+      task:
+        description: 'Which adapter to train: sql = Module A (Text-to-SQL, data s3://<datasets>/model_a/), chart = Module C (Vega-Lite, data s3://<datasets>/model_c/)'
+        type: choice
+        options: [sql, chart]
+        default: sql
+      base_model_id:
+        description: 'HuggingFace base model. Blank = the script default, Qwen/Qwen3.8-27B. Both adapters must share one base to be served together on one endpoint.'
+        required: false
+        default: ''
+      sample_fraction:
+        description: 'Fraction of the data to train on. 0.001 = smoke run, 1.0 = full run.'
+        required: false
+        default: '0.001'
+      epochs:
+        description: 'Epochs'
+        required: false
+        default: '3'
+      instance_type:
+        description: 'SageMaker training instance (only ml.g5.2xlarge has quota today)'
+        required: false
+        default: 'ml.g5.2xlarge'
+      max_runtime_seconds:
+        description: 'Hard stop. Smoke 5400 (90m), full 43200 (12h).'
+        required: false
+        default: '5400'
+      extra_hyperparameters:
+        description: 'Optional JSON merged into the hyperparameters, e.g. {"max_seq_length":"1024","grad_accum":"8","lora_r":"16"}'
+        required: false
+        default: '{}'
+
+permissions:
+  id-token: write
+  contents: read
+
+concurrency:
+  group: alibi-ml-training-launch
+  cancel-in-progress: false
+
+jobs:
+  launch:
+    if: inputs.confirm == 'LAUNCH'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ML/terraform/envs/dev
+    env:
+      TF_VAR_hf_token: ${{ secrets.HF_TOKEN }}
+      TF_VAR_sagemaker_role_arn: ${{ vars.AWS_ML_SAGEMAKER_ROLE_ARN }}
+      TF_VAR_datasets_bucket: ${{ vars.AWS_ML_DATASETS_BUCKET }}
+      TF_VAR_artifacts_bucket: ${{ vars.AWS_ML_ARTIFACTS_BUCKET }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      # training_job_<run_id>.json and launch_training_<run_id>.ps1 are Terraform
+      # local_file resources written into the working directory, and they are
+      # gitignored. They were produced on ml-deploy.yml's runner, which is a
+      # different, already-destroyed machine — so on this runner they simply do
+      # not exist, and the step below used to fail with "not found" every time.
+      #
+      # Regenerating them here also makes the submitted job match the ref this
+      # workflow was dispatched from, rather than whatever an earlier ml-deploy
+      # run happened to leave behind. module.training creates no cloud
+      # resources at all (see ML/terraform/modules/training) — it only writes
+      # these two files — so this apply cannot start or bill anything.
+      - name: Regenerate the training job config
+        env:
+          IN_RUN_ID: ${{ inputs.run_id }}
+          IN_TASK: ${{ inputs.task }}
+          IN_BASE: ${{ inputs.base_model_id }}
+          IN_FRACTION: ${{ inputs.sample_fraction }}
+          IN_EPOCHS: ${{ inputs.epochs }}
+          IN_INSTANCE: ${{ inputs.instance_type }}
+          IN_RUNTIME: ${{ inputs.max_runtime_seconds }}
+          IN_EXTRA: ${{ inputs.extra_hyperparameters }}
+        run: |
+          # Workflow inputs go in as -var, which outranks terraform.tfvars; plain
+          # TF_VAR_* would LOSE to it (that is what blanked the bucket names).
+          # The map is built with jq so a base model id or JSON blob never meets
+          # shell quoting.
+          EXTRA="${IN_EXTRA:-}"
+          if [ -z "$EXTRA" ]; then EXTRA='{}'; fi
+          HP=$(jq -cn --arg frac "$IN_FRACTION" --arg ep "$IN_EPOCHS" --arg base "$IN_BASE" --arg task "$IN_TASK" --argjson extra "$EXTRA" '
+            {epochs: $ep, learning_rate: "2e-4", sample_fraction: $frac, task: $task}
+            + (if $base != "" then {base_model_id: $base} else {} end)
+            + $extra')
+          echo "hyperparameters: $HP"
+          MODEL_NAME=model_a; if [ "$IN_TASK" = "chart" ]; then MODEL_NAME=model_c; fi
+          ARGS=(-var "training_model_name=$MODEL_NAME" -var "training_hyperparameters=$HP" -var "training_instance_type=$IN_INSTANCE" -var "training_max_runtime_seconds=$IN_RUNTIME")
+          if [ -n "$IN_RUN_ID" ]; then ARGS+=(-var "training_run_id=$IN_RUN_ID"); fi
+          terraform apply -auto-approve -target=module.training "${ARGS[@]}"
+
+      - name: Submit training job
+        run: |
+          # Read the run id off the generated file rather than `terraform output`:
+          # a -target apply does not record root outputs that don't depend on
+          # the target, and training_run_id is just var.training_run_id, so the
+          # output comes back empty. This runner starts clean, so exactly one
+          # training_job_*.json exists.
+          shopt -s nullglob
+          FILES=(training_job_*.json)
+          if [ "${#FILES[@]}" -ne 1 ]; then
+            echo "Expected exactly one training_job_*.json, found: ${FILES[*]:-none}" >&2
+            exit 1
+          fi
+          CONFIG_FILE="${FILES[0]}"
+          if [ ! -f "$CONFIG_FILE" ]; then
+            echo "$CONFIG_FILE not found — the regenerate step above should have written it." >&2
+            exit 1
+          fi
+
+          JOB_NAME=$(jq -r '.TrainingJobName' "$CONFIG_FILE")
+          if aws sagemaker describe-training-job --training-job-name "$JOB_NAME" >/dev/null 2>&1; then
+            echo "$JOB_NAME already exists — not resubmitting. Bump training_run_id in terraform.tfvars and re-run this workflow."
+            exit 0
+          fi
+
+          echo "Submitting $JOB_NAME ..."
+          aws sagemaker create-training-job --cli-input-json "file://$CONFIG_FILE"
+
+          echo ""
+          echo "Submitted. Monitor:"
+          echo "  aws sagemaker describe-training-job --training-job-name $JOB_NAME --query TrainingJobStatus"
+          echo "  aws sagemaker wait training-job-completed-or-stopped --training-job-name $JOB_NAME"

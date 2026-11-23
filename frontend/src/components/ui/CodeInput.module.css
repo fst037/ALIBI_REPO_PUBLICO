@@ -1,0 +1,24 @@
+.row {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+  margin: 8px 0 4px;
+}
+.box {
+  width: 52px;
+  height: 60px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 24px;
+  color: var(--fg-1);
+  outline: none;
+  transition: all var(--dur) var(--ease);
+}
+.box:focus,
+.box.filled {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}

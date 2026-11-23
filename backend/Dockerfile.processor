@@ -1,0 +1,28 @@
+# Stage-1 "processor" Lambda image (Module B ingestion).
+#
+# A container image rather than a zip because the file parsers do not fit:
+# pandas + pyarrow + openpyxl + pdfplumber + python-docx exceed Lambda's 250 MB
+# unzipped limit, while the image limit is 10 GB. The API Lambda stays a zip
+# precisely because it never parses a spreadsheet — it only reads the resulting
+# Parquet with DuckDB.
+#
+# Built and pushed by .github/workflows/backend-deploy.yml. Build locally with:
+#   docker build -f backend/Dockerfile.processor -t alibi-processor backend/
+
+FROM public.ecr.aws/lambda/python:3.12
+
+# Dependencies first, so a code-only change reuses the (slow, large) layer.
+COPY requirements.txt requirements-ingest.txt ./
+RUN pip install --no-cache-dir -r requirements-ingest.txt
+
+# `requirements-ingest.txt` already includes requirements.txt by reference, so
+# the image carries both the parsers and everything the shared app code needs
+# (SQLModel, psycopg, …). The processor never opens a database connection, but
+# it imports modules that import the driver — paying for the wheel is cheaper
+# than maintaining a second, subtly-different dependency graph.
+
+COPY app/ ${LAMBDA_TASK_ROOT}/app/
+
+# Reads an SQS batch of S3 ObjectCreated records, or a direct {ownerId,
+# uploadId} on retry. See app/ingest/lambda_handler.py.
+CMD ["app.ingest.lambda_handler.processor_handler"]

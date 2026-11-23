@@ -1,0 +1,154 @@
+openapi: 3.0.3
+info:
+  title: ALIBI — Visualization domain
+  version: 0.1.0
+  description: >
+    Export of results and charts (Module C / flow 3.5). The chart itself travels embedded in the
+    chat domain's `QueryResult` and switching between the 7 types is client-side, so this domain
+    exposes only the export of a result or of a saved chart. The export returns an S3 presigned URL
+    (serverless pattern: it avoids Lambda's 6 MB payload ceiling). Plan gating: CSV is Free; PNG and
+    PDF are Pro (a Free user gets a 402 → upsell to Subscription).
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: exports
+    description: "Export of a result or saved chart to CSV, PNG or PDF."
+
+paths:
+  /exports:
+    post:
+      tags: [exports]
+      operationId: createExport
+      summary: "Exports a result or saved chart to CSV / PNG / PDF."
+      description: >
+        Generates the requested file and returns a presigned download URL. - `csv`: the results table.
+        Available on every plan. - `png`: image of the chart in the given `chartType`. Requires Pro. -
+        `pdf`: report (question + table + chart + SQL). Requires Pro. The source is either a chat
+        message (`messageId`) or a saved chart (`savedChartId`). `chartType` is required for `png`/`pdf`
+        and ignored for `csv`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ExportRequest' }
+      responses:
+        '201':
+          description: "Export generated; presigned download URL."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ExportResult' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: "The requested format (PNG/PDF) requires the Pro plan."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: plan_upgrade_required, message: 'Exporting in this format requires the Pro plan.' }
+        '404':
+          description: "The source result or chart does not exist."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422':
+          description: "`chartType` is missing for a format that requires it, or the body is invalid."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: validation_error, message: 'chartType is required to export as an image or PDF.' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  responses:
+    Unauthorized:
+      description: "The session token is missing or invalid."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthorized, message: 'Sign in to continue.' }
+
+  schemas:
+    ExportFormat:
+      type: string
+      enum: [csv, png, pdf]
+
+    ChartType:
+      type: string
+      enum: [bar, line, scatter, pie, histogram, heatmap, table]
+
+    ExportRequest:
+      type: object
+      required: [source, format]
+      properties:
+        source: { $ref: '#/components/schemas/ExportSource' }
+        format: { $ref: '#/components/schemas/ExportFormat' }
+        chartType:
+          allOf: [{ $ref: '#/components/schemas/ChartType' }]
+          description: "Chart type to render. Required for png/pdf, ignored for csv."
+
+    ExportSource:
+      description: "Exactly one of `messageId` (a chat answer) or `savedChartId` (a saved chart)."
+      oneOf:
+        - $ref: '#/components/schemas/ExportFromMessage'
+        - $ref: '#/components/schemas/ExportFromSavedChart'
+
+    ExportFromMessage:
+      type: object
+      required: [messageId]
+      properties:
+        messageId:
+          type: string
+          description: "Id of the assistant message whose result is being exported."
+
+    ExportFromSavedChart:
+      type: object
+      required: [savedChartId]
+      properties:
+        savedChartId:
+          type: string
+          description: "Id of the saved chart to export."
+
+    ExportResult:
+      type: object
+      required: [downloadUrl, format, expiresAt]
+      properties:
+        downloadUrl:
+          type: string
+          format: uri
+          description: "S3 presigned URL to download the generated file."
+        format: { $ref: '#/components/schemas/ExportFormat' }
+        expiresAt:
+          type: string
+          format: date-time
+          description: "Moment at which the presigned URL stops being valid."
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+security:
+  - bearerAuth: []

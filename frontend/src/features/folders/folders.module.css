@@ -1,0 +1,254 @@
+/* Folders — one flat level, so this file has no tree/indent styles at all. */
+
+/* ---- Shelf: horizontally-scrolling row of folder tiles ----
+   Sized like the dataset cards below (`Biblioteca.module.css` `.dcard`) so a
+   card dragged off the grid reads as "the same kind of thing" being dropped
+   onto one of these, not a UI metaphor switch mid-gesture. */
+
+.shelf {
+  display: flex;
+  align-items: stretch;
+  gap: 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  /* Room for the scrollbar and the `dropHover` scale-up so neither clips. */
+  padding: 2px 2px 10px;
+  margin-bottom: 18px;
+  /* Firefox (and Chromium ≥121, which now prefers this standard pair over its
+     own `::-webkit-scrollbar-*`) reads `scrollbar-width` for the size but
+     falls back to the OS-default *colour* — flat white/grey, clashing hard
+     with the dark canvas — unless `scrollbar-color` is set too. Both engines
+     need both declarations; neither alone is enough. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--glass-border-bright) transparent;
+}
+.shelf::-webkit-scrollbar { height: 6px; }
+.shelf::-webkit-scrollbar-thumb { background: var(--glass-border-bright); border-radius: 999px; }
+.shelf::-webkit-scrollbar-track { background: transparent; }
+
+.tile {
+  position: relative;
+  flex: none;
+  width: 188px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  color: var(--fg-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease),
+              color var(--dur) var(--ease), transform var(--dur-fast) var(--ease),
+              box-shadow var(--dur) var(--ease);
+}
+.tile:hover { border-color: var(--accent-line); color: var(--fg-1); }
+.tile:focus-visible {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.tile.on {
+  border-color: var(--accent);
+  color: var(--fg-1);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+.tile.on .tileIco { color: var(--accent); background: var(--accent-soft); }
+.tile.on .tileCount { color: var(--accent); }
+
+.tileTop {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+}
+.tileIco {
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-fill-strong);
+  color: var(--fg-3);
+  flex: none;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.tileName {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--fg-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tileCount {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--fg-4);
+  font-variant-numeric: tabular-nums;
+}
+
+.tileMenuBtn {
+  width: 26px;
+  height: 26px;
+  flex: none;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-4);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease);
+}
+.tileMenuBtn:hover { background: var(--glass-fill-strong); color: var(--fg-1); }
+
+/* A dataset dragged over a folder tile — the drop target, not the drag source
+   (that's `.dragging` in Biblioteca.module.css). `scale` plus the accent ring
+   is deliberately more emphatic than `.tile.on`'s: this is a target the user
+   is aiming at mid-gesture, not a passive "currently selected" state. */
+.tile.dropHover {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+  transform: scale(1.04);
+}
+.tile.justDropped { animation: tile-drop-pulse 550ms var(--ease); }
+@keyframes tile-drop-pulse {
+  0% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  70% { box-shadow: 0 0 0 10px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+.tileNew {
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-style: dashed;
+  color: var(--fg-3);
+}
+.tileNew:hover { color: var(--accent); border-color: var(--accent-line); }
+
+/* ---- Folder context menu ----
+   Portalled to <body> (see FolderBar.tsx) rather than nested in its tile:
+   `.shelf` needs `overflow-y: hidden` to clip each tile's background at its
+   rounded corners, and that clips a nested absolutely-positioned popover
+   right along with it. `top`/`right` are set inline per-instance from the
+   trigger button's own `getBoundingClientRect()` instead of being relative
+   to a tile that, post-portal, is no longer this element's positioned
+   ancestor. */
+
+.menuScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+.menu {
+  position: fixed;
+  z-index: 201;
+  min-width: 178px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--canvas-2);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.menu button:hover { background: var(--glass-fill); color: var(--fg-1); }
+.menu button.danger { color: var(--danger); }
+
+/* ---- Modals (create / rename / attach) ---- */
+
+.modal { padding: 26px 26px 22px; }
+.modalTitle {
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0 0 6px;
+}
+.modalSub {
+  font-size: 13px;
+  color: var(--fg-3);
+  line-height: 1.5;
+  margin: 0 0 18px;
+}
+.modalFoot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.pickList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 260px;
+  overflow-y: auto;
+  margin-bottom: 14px;
+}
+.pickRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 11px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
+}
+.pickRow:hover:not(:disabled) { border-color: var(--accent-line); }
+.pickRow:disabled { cursor: default; opacity: 0.7; }
+.pickRow.picked { border-color: var(--accent); color: var(--fg-1); }
+
+.pickBox {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  border: 1px solid var(--glass-border);
+  border-radius: 5px;
+  color: var(--canvas);
+}
+.pickRow.picked .pickBox {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.newRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.newRow .field { flex: 1; }
+
+.error {
+  margin-top: 12px;
+  font-size: 12.5px;
+  color: var(--danger);
+}

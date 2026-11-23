@@ -1,0 +1,56 @@
+[
+  {
+    "id": "free",
+    "name": "Free",
+    "priceMonthlyUsd": 0,
+    "priceAnnualUsd": 0,
+    "overagePricePerQueryUsd": null,
+    "recommended": false,
+    "features": [
+      "3 datasets",
+      "20 consultas por mes",
+      "1.000 filas por consulta",
+      "Archivos de hasta 5 MB",
+      "Historial de 7 días",
+      "Exportación a CSV",
+      "Respuestas en modo Rápido"
+    ],
+    "limits": {
+      "datasets": 3,
+      "queriesPerMonth": 20,
+      "rowsPerQuery": 1000,
+      "maxFileMb": 5,
+      "historyDays": 7,
+      "exportFormats": ["csv"],
+      "answerModes": ["quick"]
+    }
+  },
+  {
+    "id": "pro",
+    "name": "Pro",
+    "priceMonthlyUsd": 20,
+    "priceAnnualUsd": 16,
+    "overagePricePerQueryUsd": 0.08,
+    "recommended": true,
+    "features": [
+      "Datasets ilimitados",
+      "250 consultas por mes",
+      "5.000 filas por consulta",
+      "Archivos de hasta 100 MB",
+      "Historial ilimitado",
+      "Exportación a CSV, PNG y PDF",
+      "Respuestas en modo Rápido y Profundo",
+      "Consultas adicionales con tope de gasto",
+      "Soporte por correo"
+    ],
+    "limits": {
+      "datasets": null,
+      "queriesPerMonth": 250,
+      "rowsPerQuery": 5000,
+      "maxFileMb": 100,
+      "historyDays": null,
+      "exportFormats": ["csv", "png", "pdf"],
+      "answerModes": ["quick", "deep"]
+    }
+  }
+]

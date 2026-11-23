@@ -1,0 +1,70 @@
+fastapi>=0.115,<0.116
+mangum>=0.19,<0.20
+pydantic-settings>=2.5,<3
+# Lets pydantic-settings load backend/.env (env_file in app/core/config.py).
+python-dotenv>=1.0,<2
+# psycopg 3 (binary wheels) + its connection pool. The Ubuntu deploy runner
+# (backend-deploy.yml) builds the manylinux wheels for Lambda; the [binary]
+# extra also ships Windows/macOS wheels for local dev. The domain services use
+# this only when ALIBI_DATABASE_URL is set; without it they fall back to the
+# in-memory fixtures, so tests/CI don't need a database.
+psycopg[binary,pool]>=3.2,<4
+# Password hashing for the auth domain (binary wheels; built for Lambda on
+# the Ubuntu deploy runner). Only used when auth runs against the database.
+bcrypt>=4.2,<5
+pyjwt[crypto]>=2.9,<3
+# ORM (Pydantic + SQLAlchemy in one model) for the system-wide tables in
+# backend/db/migrations/. Uses the psycopg3 driver already pinned above via
+# SQLAlchemy's postgresql+psycopg dialect — no async rework needed.
+# Capped below 0.0.45: that release rejects timezone-naive datetimes on
+# insert, and every model in app/db/models.py defaults to the naive
+# `datetime.utcnow`. Lift the cap only together with moving those to
+# timezone-aware values.
+sqlmodel>=0.0.22,<0.0.45
+# Schema migrations, replacing the hand-applied SQL files in backend/db/
+# migrations/ going forward (see backend/db/README.md).
+alembic>=1.13,<2
+# --- Module B (Zero-ETL ingestion) ---
+# SQLAlchemy column type for the per-column embeddings Module A retrieves over
+# (`dataset_column_embeddings.embedding`). Pure Python; the server-side
+# `vector` extension is created by the 0003_module_b migration.
+pgvector>=0.3,<0.4
+# The query engine over the data plane: DuckDB reads the Parquet tables
+# straight from S3 (or local disk) — no separate database to run. `sqlglot`
+# parses generated SQL to enforce the read-only guardrail before execution.
+duckdb>=1.1,<2
+# Single pin for both consumers of sqlglot (Module B's `app/services/query.py`
+# guardrail and Module A's `app/services/text2sql/sql.py`): the lower bound is
+# Module A's (25.24 — it relies on the `read=`/`write=` dialect round-trip that
+# transpiles the fine-tune's double-quoted string literals to DuckDB), and the
+# upper bound stays below 26 because the `exp.*` node names the guardrails match
+# on have changed across majors before.
+sqlglot>=25.24,<26
+# boto3 carries every AWS call: presigned upload URLs, the committer and bridge
+# Lambda invokes, and — since 2026-10-05, when ALIBI went AWS-only — every model
+# call, through Bedrock (`app/core/bedrock.py`). Present in the Lambda runtime
+# already, but pinned so local dev matches. Converse needs a 2024+ botocore.
+boto3>=1.35,<2
+# The `openai` SDK was here (Module A, the orchestrator and Module B all reached
+# Azure AI Foundry through it) and was REMOVED on 2026-10-05: every model call
+# now goes to Bedrock through boto3, above, which the Lambda runtime ships
+# anyway — so the zip got smaller, against the 240 MB gate at ~233 MB.
+# Module C (auto-visualization). Validates the Vega-Lite specification the model
+# proposes against the official v5 JSON Schema, vendored at
+# app/orchestrator/schemas/ straight from the `vega-lite` npm package the
+# frontend renders with — so the validator and the renderer agree on what is
+# legal by construction, not by two pins that drift.
+#
+# The plan called for `ajv` + the `vega-lite` package doing this "in the
+# backend"; the backend is Python on Lambda, and standing up a Node runtime
+# beside it to run one validation is not a trade worth making. `jsonschema`
+# reads the same Draft-07 document. Pure Python plus one small native wheel
+# (rpds-py) — ~2 MB with the schema, against a 240 MB gate at ~233 MB.
+jsonschema>=4.21,<5
+#
+# LiteLLM was here and was REMOVED. It gave the orchestrator a provider-agnostic
+# seam (a routing string picked azure/openai/bedrock/ollama), which is not a
+# property ALIBI uses: every call goes to one provider (today, Bedrock). It cost ~170 MB —
+# enough on its own to push the package past Lambda's 250 MB zip ceiling and
+# force the whole function onto a container image — and it could not be trimmed,
+# because ~46 MB of it is a gateway server that `import litellm` reaches into.

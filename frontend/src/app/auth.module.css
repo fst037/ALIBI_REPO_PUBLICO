@@ -1,0 +1,200 @@
+/* Shared auth shell (Login + Registro).
+   Global classes (.btn, .field, .field-wrap, .pill, .segmented, …) come from
+   alibi.css. The 6-digit code entry lives in the CodeInput primitive. */
+
+.auth {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* ---- Left brand panel ---- */
+.authBrand {
+  width: 44%;
+  flex: none;
+  padding: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border-right: 1px solid var(--glass-border);
+  position: relative;
+  overflow: hidden;
+}
+.authBrand::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(600px 400px at 20% 20%, var(--accent-soft), transparent 60%);
+  pointer-events: none;
+}
+.abTop {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  position: relative;
+  z-index: 1;
+  color: var(--fg-1);
+  text-decoration: none;
+}
+.abMid {
+  position: relative;
+  z-index: 1;
+  max-width: 400px;
+}
+.abQuote {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.3;
+  text-wrap: balance;
+}
+.abBy {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  margin-top: 22px;
+  color: var(--fg-2);
+  font-size: 13px;
+}
+.abFeats {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.abFeat {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  color: var(--fg-2);
+  font-size: 13.5px;
+}
+
+/* ---- Right form panel ---- */
+.authMain {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 28px 40px;
+  overflow-y: auto;
+}
+/* `margin: auto` centres the card while it fits and lets it start at the top
+   (and scroll) when it doesn't. `justify-content: center` on the container
+   did the first but clipped the top of a card taller than the window. */
+.authCard {
+  width: 100%;
+  max-width: 400px;
+  margin-block: auto;
+}
+/* Short windows (a laptop at 100 %): tighten the vertical rhythm so the whole
+   form is in view instead of behind a scrollbar. */
+@media (max-height: 800px) {
+  .authMain {
+    padding-block: 20px;
+  }
+  .authH {
+    font-size: 23px;
+  }
+  .authSub {
+    margin: 6px 0 16px;
+    font-size: 13.5px;
+  }
+  .formFields {
+    gap: 11px;
+  }
+  .dividerOr {
+    margin: 14px 0;
+  }
+  .authFoot {
+    margin-top: 14px;
+  }
+}
+.authH {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+.authSub {
+  color: var(--fg-2);
+  margin: 9px 0 26px;
+  font-size: 14.5px;
+}
+/* "o con tu email", between "Continuar con Google" and the form (prototype's .divider-or). */
+.dividerOr {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 20px 0;
+  color: var(--fg-4);
+  font-size: 12px;
+}
+.dividerOr::before,
+.dividerOr::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--glass-border);
+}
+.formFields {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+.authFoot {
+  text-align: center;
+  margin-top: 22px;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+.authFoot a {
+  color: var(--accent);
+  font-weight: 500;
+}
+
+/* ---- Shared confirmation visuals (verify, forgot-sent) ---- */
+.mailIco {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  margin: 0 auto 20px;
+  box-shadow: 0 6px 26px -6px var(--accent-glow);
+}
+.resend {
+  text-align: center;
+  margin-top: 20px;
+  color: var(--fg-3);
+  font-size: 13px;
+}
+
+@media (max-width: 860px) {
+  .authBrand {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .authMain {
+    padding-block: 12px;
+  }
+  .authSub {
+    margin: 4px 0 10px;
+  }
+  .formFields {
+    gap: 8px;
+  }
+  .authFoot {
+    margin-top: 10px;
+  }
+}

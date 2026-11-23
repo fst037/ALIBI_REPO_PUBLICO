@@ -1,0 +1,218 @@
+[
+  {
+    "id": "sc_region",
+    "datasetId": "sales",
+    "datasetName": "sales_2024.csv",
+    "question": "Top 5 regions by total sales in 2024",
+    "chartType": "bar",
+    "savedAt": "2026-07-09",
+    "result": {
+      "naturalResponse": "Buenos Aires leads with a 36.4% share of total sales, generating $1.28M in revenue across 420 units sold. Córdoba and Santa Fe follow with 23.9% and 17.3% respectively, while Mendoza and Salta represent growth opportunities in emerging markets.",
+      "insights": [
+        {
+          "label": "Largest share",
+          "value": "36.4%",
+          "delta": "Buenos Aires · $1.28M"
+        },
+        {
+          "label": "Regional average",
+          "value": "20%",
+          "delta": "5 regions analyzed"
+        },
+        {
+          "label": "Total sales",
+          "value": "$3.53M",
+          "delta": "1,180 units"
+        }
+      ],
+      "sql": "SELECT region, SUM(sales) AS sales, SUM(units) AS units,\n  ROUND(100.0*SUM(sales)/SUM(SUM(sales)) OVER (),1) AS share\nFROM sales\nWHERE date >= '2024-01-01'\nGROUP BY region\nORDER BY sales DESC\nLIMIT 5;",
+      "rowCount": 5,
+      "rowsLabel": "5 rows",
+      "chartTitle": "Sales by region · 2024",
+      "autoChartType": "bar",
+      "table": {
+        "columns": [
+          {
+            "key": "region",
+            "label": "Region",
+            "align": "left"
+          },
+          {
+            "key": "sales",
+            "label": "Sales",
+            "align": "num"
+          },
+          {
+            "key": "units",
+            "label": "Units",
+            "align": "num"
+          },
+          {
+            "key": "share",
+            "label": "Share",
+            "align": "num"
+          }
+        ],
+        "rows": [
+          {
+            "region": "Buenos Aires",
+            "sales": "$1,284,500",
+            "units": 420,
+            "share": "36.4%"
+          },
+          {
+            "region": "Córdoba",
+            "sales": "$842,100",
+            "units": 310,
+            "share": "23.9%"
+          },
+          {
+            "region": "Santa Fe",
+            "sales": "$611,900",
+            "units": 250,
+            "share": "17.3%"
+          },
+          {
+            "region": "Mendoza",
+            "sales": "$498,200",
+            "units": 180,
+            "share": "14.1%"
+          },
+          {
+            "region": "Salta",
+            "sales": "$292,400",
+            "units": 120,
+            "share": "8.3%"
+          }
+        ]
+      },
+      "chartData": {
+        "kind": "categorical",
+        "data": [
+          {
+            "label": "Buenos Aires",
+            "value": 1284500
+          },
+          {
+            "label": "Córdoba",
+            "value": 842100
+          },
+          {
+            "label": "Santa Fe",
+            "value": 611900
+          },
+          {
+            "label": "Mendoza",
+            "value": 498200
+          },
+          {
+            "label": "Salta",
+            "value": 292400
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": "sc_monthly_sales",
+    "datasetId": "sales",
+    "datasetName": "sales_2024.csv",
+    "question": "Monthly sales trend",
+    "chartType": "line",
+    "savedAt": "2026-07-06",
+    "result": {
+      "naturalResponse": "Sales grew steadily through the first half, rising from $420,000 in January to $620,000 in June — a 47.6% increase. The only dip was in April (-2.9% against March), more than recovered in May and June.",
+      "insights": [
+        {
+          "label": "First-half growth",
+          "value": "+47.6%",
+          "delta": "January → June"
+        },
+        {
+          "label": "Best month",
+          "value": "$620,000",
+          "delta": "June"
+        },
+        {
+          "label": "Monthly average",
+          "value": "$512,167",
+          "delta": "6 months"
+        }
+      ],
+      "sql": "SELECT date_trunc('month', date) AS month, SUM(sales) AS sales\nFROM sales\nWHERE date >= '2024-01-01' AND date < '2024-07-01'\nGROUP BY month\nORDER BY month;",
+      "rowCount": 6,
+      "rowsLabel": "6 rows",
+      "chartTitle": "Monthly sales trend · 2024",
+      "autoChartType": "line",
+      "table": {
+        "columns": [
+          {
+            "key": "month",
+            "label": "Month",
+            "align": "left"
+          },
+          {
+            "key": "sales",
+            "label": "Sales",
+            "align": "num"
+          }
+        ],
+        "rows": [
+          {
+            "month": "January",
+            "sales": "$420,000"
+          },
+          {
+            "month": "February",
+            "sales": "$468,000"
+          },
+          {
+            "month": "March",
+            "sales": "$510,000"
+          },
+          {
+            "month": "April",
+            "sales": "$495,000"
+          },
+          {
+            "month": "May",
+            "sales": "$560,000"
+          },
+          {
+            "month": "June",
+            "sales": "$620,000"
+          }
+        ]
+      },
+      "chartData": {
+        "kind": "categorical",
+        "data": [
+          {
+            "label": "Jan",
+            "value": 420000
+          },
+          {
+            "label": "Feb",
+            "value": 468000
+          },
+          {
+            "label": "Mar",
+            "value": 510000
+          },
+          {
+            "label": "Apr",
+            "value": 495000
+          },
+          {
+            "label": "May",
+            "value": 560000
+          },
+          {
+            "label": "Jun",
+            "value": 620000
+          }
+        ]
+      }
+    }
+  }
+]

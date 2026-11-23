@@ -1,0 +1,1113 @@
+openapi: 3.0.3
+info:
+  title: ALIBI — Auth domain
+  version: 0.1.0
+  description: >
+    Multi-tenant identity and session, account/workspace, plan catalogue, billing (subscription,
+    tokenized payment method, cost ledger) and notifications. The `auth` domain of ALIBI's modular
+    monolith. Source of truth for shapes: `frontend/src/types/index.ts`.
+
+servers:
+  - url: /api/v1
+    description: API Gateway HTTP API → Lambda (FastAPI + Mangum)
+
+tags:
+  - name: auth
+    description: "Registration, login, email verification (6-digit code by email), password reset."
+  - name: account
+    description: "Account and workspace data for the authenticated user."
+  - name: plans
+    description: "Catalogue of subscription plans (Free/Pro, ARS, VAT excluded)."
+  - name: billing
+    description: "Active subscription and its overage, payment method and cost ledger."
+  - name: notifications
+    description: "User notifications (cross-cutting, user-scoped resource)."
+
+paths:
+  # ------------------------------------------------------------------ auth ---
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      summary: "Creates the account and emails its verification code (step 1 of registration)."
+      description: >
+        Creates the user (email unverified) and their workspace, and emails a 6-digit code. **No session
+        is opened here**: it opens at `POST /auth/verify-email`, once the address is proven.
+       The client drops any token it still holds before calling this,
+        so nobody keeps browsing as the previous user in between.
+
+        If the code cannot be sent the account is not created (503), so the address is not left taken by
+        an account nobody can verify. Plan selection happens after verification (see the billing domain).
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        '201':
+          description: "Account created and code emailed; verification pending."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EmailVerificationRequired' }
+        '409':
+          description: >
+            The email is already registered (`email_already_registered`), or `acceptedTermsVersion` is not the
+            version of the Terms and Privacy Policy in force (`terms_outdated`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: email_already_registered, message: 'That email already has an account.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/EmailUnavailable' }
+
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      summary: "Authenticates and establishes the multi-tenant session."
+      description: >
+        Returns the session for an account whose email is verified. While it is still unverified (a
+        registration abandoned before the code), it returns `email_verification_required` instead and
+        emails a fresh code — unless one went out under a minute ago, which is still the one to use.
+        There is no code on every login: like comparable BI tools, the address is verified once.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: "Session established, or email verification required."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginResponse' }
+        '401':
+          description: "Invalid credentials."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: invalid_credentials, message: 'Incorrect email or password. Try again.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503': { $ref: '#/components/responses/EmailUnavailable' }
+
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      summary: Close the current session.
+      responses:
+        '204':
+          description: "Session closed."
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: getCurrentUser
+      summary: "Returns the currently authenticated user."
+      responses:
+        '200':
+          description: "Authenticated user."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      operationId: verifyEmail
+      summary: "Verifies the 6-digit code sent by email and opens the session."
+      description: >
+        The code is valid for 10 minutes, works once, and is burnt after 5 wrong guesses (a 6-digit
+        space is otherwise walkable inside its lifetime). A new code replaces the previous one.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/VerifyEmailRequest' }
+      responses:
+        '200':
+          description: "Email verified; session established."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '401':
+          description: "Wrong code."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: invalid_code, message: 'Incorrect code. Try again.' }
+        '429':
+          description: "Too many wrong guesses: the code is burnt, request a new one."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: too_many_attempts, message: 'Too many attempts. Request a new code.' }
+        '410':
+          description: "The code expired, was already used, or none was sent."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: code_expired, message: 'The code expired. Request a new one.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/verify-email/resend:
+    post:
+      tags: [auth]
+      operationId: resendVerificationEmail
+      summary: "Resends the email verification code."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailOnlyRequest' }
+      responses:
+        '202':
+          description: "If the email exists and is unverified, a new code is sent (neutral response)."
+        '429':
+          description: "A code went out under a minute ago."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: resend_too_soon, message: 'Wait a minute before requesting another code.' }
+        '503': { $ref: '#/components/responses/EmailUnavailable' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/google:
+    post:
+      tags: [auth]
+      operationId: googleSignIn
+      summary: "Signs in or signs up with a Google ID token (\"Continuar con Google\")."
+      description: >
+        `credential` is the ID token Google Identity Services gives the browser. The server checks its
+        signature against Google's keys, its audience (this app's client id), issuer, expiry and that
+        Google verified the email. Then it opens the session of the account linked to that Google
+        account; links an existing account with the same email (dropping its password if that email
+        had never been verified); or creates the account — which needs `acceptedTermsVersion`, as
+        `register` does. No emailed code: Google already proved the address.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/GoogleSignInRequest' }
+      responses:
+        '200':
+          description: "Session established."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/GoogleSignInResult' }
+        '401':
+          description: "The token is not a valid Google ID token for this app."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: invalid_google_token, message: 'We could not validate your Google account. Try again.' }
+        '409':
+          description: >
+            `terms_required`: no account exists yet and the Terms were not accepted — ask for consent and
+            send the same credential with `acceptedTermsVersion`. `terms_outdated`: the version sent is not
+            the one in force. `google_account_mismatch`: the email belongs to an account linked to another
+            Google account.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: terms_required, message: 'To create your account with Google, accept the Terms and the Privacy Policy.' }
+        '503':
+          description: "Google sign-in is not configured, or Google's keys could not be reached."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: google_unavailable, message: 'Google sign-in is not available right now.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/password-reset/request:
+    post:
+      tags: [auth]
+      operationId: requestPasswordReset
+      summary: "Requests the password-recovery token."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EmailOnlyRequest' }
+      responses:
+        '202':
+          description: "If the email exists, the recovery link is sent (neutral response, so accounts are not leaked)."
+        '429': { $ref: '#/components/responses/RateLimited' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      operationId: confirmPasswordReset
+      summary: "Sets a new password with the recovery token."
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PasswordResetConfirmRequest' }
+      responses:
+        '200':
+          description: "Password updated; session established."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuthSession' }
+        '410':
+          description: "The recovery token is invalid or expired."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # --------------------------------------------------------------- account ---
+  /account:
+    get:
+      tags: [account]
+      operationId: getAccount
+      summary: "Account and workspace data (Account 4.2)."
+      responses:
+        '200':
+          description: "The authenticated user's account."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+    patch:
+      tags: [account]
+      operationId: updateProfile
+      summary: "Saves profile/workspace changes per section."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
+      responses:
+        '200':
+          description: "Account updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/User' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '409':
+          description: "The new email is already in use."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  # ----------------------------------------------------------------- plans ---
+  /plans:
+    get:
+      tags: [plans]
+      operationId: listPlans
+      summary: Plan catalog (Free/Pro).
+      security: []
+      responses:
+        '200':
+          description: "Available plans."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Plan' }
+
+  /plans/{planId}:
+    get:
+      tags: [plans]
+      operationId: getPlan
+      summary: Plan details.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/PlanIdPath'
+      responses:
+        '200':
+          description: "The requested plan."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Plan' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  # --------------------------------------------------------------- billing ---
+  /subscription:
+    get:
+      tags: [billing]
+      operationId: getSubscription
+      summary: "Active subscription + usage + payment method + invoices."
+      responses:
+        '200':
+          description: "The workspace's subscription."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /subscription/upgrade:
+    post:
+      tags: [billing]
+      operationId: upgradePlan
+      summary: "Moves to the Free plan (cancel, or choose Free at registration)."
+      description: >
+        Only the Free plan can be set here. A paid plan is bought through `POST /billing/checkout` and
+        activated by `POST /billing/checkout/confirm`; asking for Pro here answers 402
+        `payment_required`. There is no third plan: past Pro's quota the user pays per query (see
+        `PUT /billing/overage`).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpgradeRequest' }
+      responses:
+        '200':
+          description: "Subscription updated."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: "The payment was declined."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: payment_declined, message: 'We couldn''t process the payment. Check the card details.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /billing/checkout:
+    post:
+      tags: [billing]
+      operationId: startCheckout
+      summary: "Starts paying for a plan on Mercado Pago."
+      description: >
+        Creates a Mercado Pago Checkout Pro preference priced from the plan (VAT included) and returns
+        the hosted page to send the user to. With a Mercado Pago test access token this is the sandbox
+        (test cards, no money moves). Mercado Pago sends the user back to `<returnOrigin>/pago/resultado`
+        with a `payment_id`; the client then calls `POST /billing/checkout/confirm`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CheckoutRequest' }
+      responses:
+        '200':
+          description: "The page to redirect the browser to."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CheckoutSession' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503':
+          description: "Payments are not configured, or Mercado Pago is unreachable (`payments_unavailable`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /billing/checkout/confirm:
+    post:
+      tags: [billing]
+      operationId: confirmCheckout
+      summary: "Verifies a Mercado Pago payment and activates the plan."
+      description: >
+        The payment is read from Mercado Pago, never taken from the browser: the plan moves only if it
+        is approved, belongs to the caller and is for the amount that was asked. Idempotent.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfirmPaymentRequest' }
+      responses:
+        '200':
+          description: "Subscription, now on the paid plan."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: "The payment was not approved (`payment_rejected`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '404':
+          description: "No such payment for this user (`payment_not_found`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: "The payment is still being processed (`payment_pending`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+        '503':
+          description: "Mercado Pago is unreachable (`payments_unavailable`)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /billing/payment-method:
+    put:
+      tags: [billing]
+      operationId: setPaymentMethod
+      summary: "Adds or updates the payment method (tokenized)."
+      description: >
+        Takes a `paymentToken` issued client-side by the external payment processor. ALIBI never
+        receives or stores the card PAN.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PaymentMethodRequest' }
+      responses:
+        '200':
+          description: "Payment method saved."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/PaymentMethod' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: "The processor rejected the token."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /billing/overage:
+    put:
+      tags: [billing]
+      operationId: setOverage
+      summary: "Turns pay-per-query overage on or off and sets its monthly cap."
+      description: >
+        Pro only. Past the plan's monthly quota each answered question is billed at the plan's
+        `overagePricePerQuery`, in arrears, and never beyond `capArs` in a month. Off by default.
+        While it is off, or once the cap is reached, asking answers `402`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/OverageRequest' }
+      responses:
+        '200':
+          description: "Subscription with the updated overage."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '402':
+          description: "The plan has no overage (Free)."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+              example:
+                error: { code: plan_upgrade_required, message: 'Las consultas adicionales están disponibles en el plan Pro.' }
+        '422': { $ref: '#/components/responses/ValidationError' }
+
+  /billing/ledger:
+    get:
+      tags: [billing]
+      operationId: getCostLedger
+      summary: "'Cost ledger: billable consumption, filterable by range and currency.'"
+      description: >
+        Every entry carries the cost in USD and in ARS; the client's currency toggle picks which one to
+        show.
+      parameters:
+        - name: from
+          in: query
+          description: "Start date (inclusive), ISO-8601 (YYYY-MM-DD)."
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: "End date (inclusive), ISO-8601 (YYYY-MM-DD)."
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: "Ledger entries for the period."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CostLedger' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /billing/ledger/export:
+    get:
+      tags: [billing]
+      operationId: exportCostLedger
+      summary: Export the cost ledger to CSV.
+      parameters:
+        - name: from
+          in: query
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          schema: { type: string, format: date }
+      responses:
+        '200':
+          description: "CSV file of the ledger."
+          content:
+            text/csv:
+              schema: { type: string, format: binary }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  # --------------------------------------------------------- notifications ---
+  /notifications:
+    get:
+      tags: [notifications]
+      operationId: listNotifications
+      summary: "List of the user's notifications."
+      responses:
+        '200':
+          description: "Notifications."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notification' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/unread-count:
+    get:
+      tags: [notifications]
+      operationId: getUnreadCount
+      summary: "Unread notification count (badge)."
+      responses:
+        '200':
+          description: "Number of unread notifications."
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UnreadCount' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+  /notifications/{id}/read:
+    post:
+      tags: [notifications]
+      operationId: markNotificationRead
+      summary: Mark a notification as read.
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        '200':
+          description: "Updated notification list."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notification' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /notifications/read-all:
+    post:
+      tags: [notifications]
+      operationId: markAllNotificationsRead
+      summary: "Marks every notification as read."
+      responses:
+        '200':
+          description: "Updated notification list."
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Notification' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: "Session token issued by login/verify-email/reset."
+
+  parameters:
+    PlanIdPath:
+      name: planId
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/PlanId' }
+
+  responses:
+    Unauthorized:
+      description: "The session token is missing or invalid."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: unauthorized, message: 'Sign in to continue.' }
+    NotFound:
+      description: "The resource does not exist."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: not_found, message: 'The resource was not found.' }
+    RateLimited:
+      description: "Too many requests (per-tier rate limit)."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: rate_limited, message: 'You''ve hit the limit. Try again in a few minutes.' }
+    EmailUnavailable:
+      description: "The verification code could not be emailed; nothing was created or changed."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error: { code: email_unavailable, message: 'We could not send the code. Try again in a few minutes.' }
+    ValidationError:
+      description: "The request body failed validation."
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          example:
+            error:
+              code: validation_error
+              message: 'Check the highlighted fields.'
+              details:
+                - field: email
+                  message: 'Invalid email.'
+
+  schemas:
+    # ---- Identity / session ----
+    User:
+      type: object
+      required: [id, name, email, workspace]
+      properties:
+        id: { type: string, example: usr_8f3k2 }
+        name: { type: string, example: Martina }
+        email: { type: string, format: email, example: alibi.pfi@gmail.com }
+        workspace: { type: string, example: ALIBI }
+
+    RegisterRequest:
+      type: object
+      required: [email, password, name, acceptedTermsVersion]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password, minLength: 8 }
+        name:
+          type: string
+          minLength: 1
+          description: >
+            First and last name, as shown in the onboarding greeting and in the account. Required: it used
+            to be optional, and without it the app had to invent a name from the email or show a fixed one.
+        workspace:
+          type: string
+          description: "Name of the workspace/organisation."
+        acceptedTermsVersion:
+          type: string
+          minLength: 1
+          example: '2026-10-11'
+          description: >
+            Version of the Terms and Conditions and Privacy Policy the user read and accepted (including the
+            express consent to the international transfer of data). Must be the version in force; the account
+            records it with the time of acceptance.
+
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, format: password }
+        remember:
+          type: boolean
+          default: false
+          description: >
+            "Keep me signed in": the session gets no expiry. If the email still needs verifying, the
+            session is issued at `/auth/verify-email` and the flag that counts is the one sent there.
+
+    LoginResponse:
+      oneOf:
+        - $ref: '#/components/schemas/AuthSession'
+        - $ref: '#/components/schemas/EmailVerificationRequired'
+      discriminator:
+        propertyName: status
+        mapping:
+          authenticated: '#/components/schemas/AuthSession'
+          email_verification_required: '#/components/schemas/EmailVerificationRequired'
+
+    AuthSession:
+      type: object
+      required: [status, accessToken, tokenType, user]
+      properties:
+        status: { type: string, enum: [authenticated] }
+        accessToken: { type: string, description: Session JWT (bearer). }
+        tokenType: { type: string, enum: [Bearer], default: Bearer }
+        expiresIn:
+          type: integer
+          nullable: true
+          description: >
+            Token lifetime in seconds, or `null` if the session does not expire: that is what the user asked
+            for with "Keep me signed in", and it only ends with `POST /auth/logout`.
+        user: { $ref: '#/components/schemas/User' }
+
+    EmailVerificationRequired:
+      type: object
+      required: [status, email]
+      description: >
+        A 6-digit code was emailed; `POST /auth/verify-email` opens the session. Returned by register,
+        and by login while the account's email is unverified.
+      properties:
+        status: { type: string, enum: [email_verification_required] }
+        email: { type: string, format: email, description: Where the code was sent. }
+
+    VerifyEmailRequest:
+      type: object
+      required: [email, code]
+      properties:
+        email: { type: string, format: email }
+        code:
+          type: string
+          pattern: '^[0-9]{6}$'
+          description: "6-digit code."
+        remember:
+          type: boolean
+          default: false
+          description: >
+            "Keep me signed in". The session is issued here, so the flag travels here: with `true` the
+            token does not expire and only ends with `POST /auth/logout`.
+
+    EmailOnlyRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+
+    GoogleSignInRequest:
+      type: object
+      required: [credential]
+      properties:
+        credential: { type: string, minLength: 1, description: "The ID token (a signed JWT) from Google Identity Services." }
+        remember:
+          type: boolean
+          default: false
+          description: '"Keep me signed in", as on the email login.'
+        acceptedTermsVersion:
+          type: string
+          nullable: true
+          description: >
+            Needed only to create an account (no account is linked to this Google account or its email yet):
+            the version of the Terms and Privacy Policy the user accepted.
+
+    GoogleSignInResult:
+      allOf:
+        - { $ref: '#/components/schemas/AuthSession' }
+        - type: object
+          required: [accountCreated]
+          properties:
+            accountCreated:
+              type: boolean
+              description: "This sign-in created the account; the client continues to plan selection, as after register."
+
+    PasswordResetConfirmRequest:
+      type: object
+      required: [token, newPassword]
+      properties:
+        token: { type: string }
+        newPassword: { type: string, format: password, minLength: 8 }
+
+    UpdateProfileRequest:
+      type: object
+      minProperties: 1
+      description: "Partial patch; saved per section (never \"save everything\")."
+      properties:
+        name: { type: string }
+        email: { type: string, format: email }
+        workspace: { type: string }
+
+    # ---- Plans ----
+    PlanId:
+      type: string
+      enum: [free, pro]
+
+    BillingCycle:
+      type: string
+      enum: [monthly, annual]
+
+    ExportFormat:
+      type: string
+      enum: [csv, png, pdf]
+
+    PlanLimits:
+      type: object
+      required: [datasets, queriesPerMonth, rowsPerQuery, maxFileMb, historyDays, exportFormats, answerModes]
+      properties:
+        datasets:
+          type: integer
+          nullable: true
+          description: "null = no practical limit."
+        queriesPerMonth:
+          type: integer
+          nullable: true
+        rowsPerQuery:
+          type: integer
+          nullable: true
+        maxFileMb:
+          type: integer
+          description: "Largest file a single upload may be, in MB."
+        historyDays:
+          type: integer
+          nullable: true
+          description: "How far back History reaches. null = unlimited."
+        exportFormats:
+          type: array
+          items: { $ref: '#/components/schemas/ExportFormat' }
+        answerModes:
+          type: array
+          description: >
+            Answer depths the plan may ask for: Free `[quick]`, Pro `[quick, deep]`. Deep (more steps, the
+            more capable synthesis model) is a Pro feature.
+          items: { type: string, enum: [quick, deep] }
+
+    Plan:
+      type: object
+      description: >
+        Prices are pesos tied to the dollar: each has a USD reference value (`*Usd`) and the peso price is
+        that value at the official rate `usdArsRate`, recomputed on every read. VAT excluded.
+      required: [id, name, currency, priceMonthly, priceAnnual, overagePricePerQuery, priceMonthlyUsd, priceAnnualUsd,
+        overagePricePerQueryUsd, usdArsRate, usdArsRateAsOf, recommended, features, limits]
+      properties:
+        id: { $ref: '#/components/schemas/PlanId' }
+        name: { type: string }
+        currency: { type: string, example: ARS, description: "ISO 4217 of the peso prices; VAT excluded." }
+        priceMonthly: { type: number, description: "Per month, billed monthly, in pesos at `usdArsRate`." }
+        priceAnnual: { type: number, description: "Per month, billed annually in advance (discounted rate), in pesos." }
+        overagePricePerQuery:
+          type: number
+          nullable: true
+          description: "Price in pesos of one query beyond `queriesPerMonth`, billed in arrears. null = no overage."
+        priceMonthlyUsd: { type: number, description: "USD reference value of `priceMonthly`." }
+        priceAnnualUsd: { type: number, description: "USD reference value of `priceAnnual`." }
+        overagePricePerQueryUsd: { type: number, nullable: true, description: "USD reference value of `overagePricePerQuery`." }
+        usdArsRate: { type: number, example: 1550, description: "Official ARS per USD the peso prices were computed at." }
+        usdArsRateAsOf: { type: string, format: date, description: "Date of `usdArsRate`." }
+        recommended: { type: boolean }
+        features:
+          type: array
+          items: { type: string }
+        limits: { $ref: '#/components/schemas/PlanLimits' }
+
+    # ---- Subscription / billing ----
+    UsageMetric:
+      type: object
+      required: [used, limit, label]
+      properties:
+        used: { type: integer }
+        limit:
+          type: integer
+          nullable: true
+          description: "null = no cap."
+        label: { type: string }
+
+    PaymentMethod:
+      type: object
+      required: [brand, last4, expiry]
+      properties:
+        brand: { type: string, example: Visa }
+        last4: { type: string, example: '4242' }
+        expiry: { type: string, example: '08/28' }
+
+    Invoice:
+      type: object
+      required: [id, date, amount, status]
+      properties:
+        id: { type: string }
+        date: { type: string, format: date }
+        amount: { type: number }
+        status: { type: string, enum: [paid, pending, failed] }
+
+    Overage:
+      type: object
+      required: [available, enabled, capArs, pricePerQueryArs, queries, amountArs]
+      description: "Pay-per-query beyond the monthly quota (Pro). `queries`/`amountArs` are this month's."
+      properties:
+        available: { type: boolean, description: "False on a plan without overage (Free)." }
+        enabled: { type: boolean }
+        capArs:
+          type: number
+          nullable: true
+          description: "Most the user accepts to be billed for overage in a month. null = no cap."
+        pricePerQueryArs: { type: number, nullable: true }
+        queries: { type: integer }
+        amountArs: { type: number }
+
+    OverageRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+        capArs:
+          type: number
+          nullable: true
+          exclusiveMinimum: true
+          minimum: 0
+          description: "ARS per month; null = no cap."
+
+    Subscription:
+      type: object
+      required: [planId, cycle, usage, overage, paymentMethod, invoices]
+      properties:
+        planId: { $ref: '#/components/schemas/PlanId' }
+        cycle: { $ref: '#/components/schemas/BillingCycle' }
+        overage: { $ref: '#/components/schemas/Overage' }
+        usage:
+          type: object
+          required: [queries, datasets, rowsPerQuery]
+          properties:
+            queries: { $ref: '#/components/schemas/UsageMetric' }
+            datasets: { $ref: '#/components/schemas/UsageMetric' }
+            rowsPerQuery: { $ref: '#/components/schemas/UsageMetric' }
+        paymentMethod:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/PaymentMethod' }]
+          nullable: true
+        invoices:
+          type: array
+          items: { $ref: '#/components/schemas/Invoice' }
+
+    UpgradeRequest:
+      type: object
+      required: [planId, cycle]
+      properties:
+        planId: { $ref: '#/components/schemas/PlanId' }
+        cycle: { $ref: '#/components/schemas/BillingCycle' }
+        paymentToken:
+          type: string
+          description: >
+            Token from the external processor. Required for Pro if there is no payment method on file;
+            ignored for Free.
+
+    CheckoutRequest:
+      type: object
+      required: [planId, cycle, returnOrigin]
+      properties:
+        planId: { $ref: '#/components/schemas/PlanId' }
+        cycle: { $ref: '#/components/schemas/BillingCycle' }
+        returnOrigin:
+          type: string
+          description: "The browser's origin (`https://host[:port]`) Mercado Pago returns the user to. Must be an allowed origin."
+
+    CheckoutSession:
+      type: object
+      required: [checkoutUrl, amountArs]
+      properties:
+        checkoutUrl: { type: string, description: "Mercado Pago's hosted payment page." }
+        amountArs: { type: number, description: "What the user will be charged, ARS, VAT included." }
+
+    ConfirmPaymentRequest:
+      type: object
+      required: [paymentId]
+      properties:
+        paymentId:
+          type: string
+          pattern: '^\d{1,20}$'
+          description: "The `payment_id` Mercado Pago appended to the return URL. A lookup key only."
+
+    PaymentMethodRequest:
+      type: object
+      required: [paymentToken]
+      properties:
+        paymentToken:
+          type: string
+          description: "Tokenized token issued client-side by the processor."
+
+    CostLedgerEntry:
+      type: object
+      required: [id, date, actionType, rowsReturned, costUsd, costArs]
+      properties:
+        id: { type: string }
+        date: { type: string, format: date-time }
+        actionType:
+          type: string
+          enum: [query, visualization]
+        datasetId: { type: string, nullable: true }
+        datasetName: { type: string, nullable: true }
+        rowsReturned: { type: integer }
+        costUsd: { type: number }
+        costArs: { type: number }
+
+    CostLedger:
+      type: object
+      required: [entries, totalUsd, totalArs]
+      properties:
+        entries:
+          type: array
+          items: { $ref: '#/components/schemas/CostLedgerEntry' }
+        totalUsd: { type: number, description: Total for the visible period in USD. }
+        totalArs: { type: number, description: Total for the visible period in ARS. }
+
+    # ---- Notifications ----
+    NotificationTone:
+      type: string
+      enum: [ok, warn, err, info]
+
+    NotificationAction:
+      type: object
+      required: [label, href]
+      properties:
+        label: { type: string }
+        href: { type: string, description: Internal route the action navigates to. }
+
+    Notification:
+      type: object
+      required: [id, tone, title, body, time, read]
+      properties:
+        id: { type: string }
+        tone: { $ref: '#/components/schemas/NotificationTone' }
+        title: { type: string }
+        body: { type: string }
+        time: { type: string }
+        read: { type: boolean }
+        action:
+          type: object
+          allOf: [{ $ref: '#/components/schemas/NotificationAction' }]
+          nullable: true
+
+    UnreadCount:
+      type: object
+      required: [count]
+      properties:
+        count: { type: integer }
+
+    # ---- Error envelope ----
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              description: "Stable machine-readable code."
+            message:
+              type: string
+              description: "Direct, actionable copy to show the user."
+            details:
+              type: array
+              description: "Per-field errors (validation)."
+              items:
+                type: object
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+
+security:
+  - bearerAuth: []

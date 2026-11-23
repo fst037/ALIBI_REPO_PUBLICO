@@ -1,0 +1,45 @@
+# Runtime dependencies for the training code tarball (model_a/ + common/).
+#
+# This file sits at the ROOT of the tarball on purpose: SageMaker script mode
+# pip-installs a requirements.txt found there automatically, before running
+# sagemaker_program. Without it the job runs on whatever the DLC happens to
+# ship — for
+# huggingface-pytorch-training:2.1.0-transformers4.36.0-gpu-py310-cu121 that is
+# transformers 4.36 and no trl at all, and train_qlora.py fails immediately on
+# both counts (see the two bounds below). The EC2 and RunPod backends install
+# from this same file so all three backends resolve identically.
+#
+# torch is deliberately ABSENT. The SageMaker and EC2 Deep Learning images
+# already ship a CUDA-matched build, and reinstalling it there is both slow and
+# a good way to break the CUDA pairing. RunPod starts from a bare pod, so its
+# launch script installs torch explicitly alongside `-r` on this file — the one
+# dependency that legitimately varies by image stays at the call site.
+#
+# Ranges, not exact pins: the two bounds that matter are load-bearing and
+# commented; everything else is left free so pip can satisfy trl's and
+# transformers' own metadata rather than fighting a stale hand-picked set.
+
+# The image (huggingface-pytorch-training 2.9 / transformers 5.3 / py312) already
+# ships transformers and torch; these floors only stop pip from DOWNGRADING them.
+# Qwen3.8-27B (model_type qwen3_5) needs transformers 5.x, so the old
+# transformers<4.47 / trl<0.12 ceilings are gone — train_qlora.py is written to
+# work across trl's SFTConfig API changes instead of pinning around them.
+transformers>=5.8  # 5.3 (the image's) OOMs loading Qwen3.8-27B 4-bit: its weight-converter path materialises bf16 on the GPU
+trl>=0.20
+peft>=0.17
+bitsandbytes>=0.46
+accelerate>=1.0
+datasets>=2.18
+sentencepiece>=0.2.0
+
+# Required, not optional: train_qlora.py sets report_to="mlflow", and
+# transformers' MLflowCallback raises at Trainer construction if mlflow is
+# missing rather than degrading to a no-op.
+mlflow>=2.14,<3
+
+boto3>=1.34
+sqlglot>=23.0
+
+# Gated-DeltaNet fast path for Qwen3.8 (transformers uses it automatically when importable;
+# the smoke runs used the slow PyTorch fallback).
+flash-linear-attention

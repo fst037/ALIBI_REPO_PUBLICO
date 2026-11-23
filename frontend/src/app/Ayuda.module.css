@@ -1,0 +1,95 @@
+.hero {
+  padding: 34px;
+  border-radius: var(--r-lg);
+  background: linear-gradient(160deg, var(--accent-soft), var(--glass-fill) 60%);
+  border: 1px solid var(--accent-line);
+  text-align: center;
+  margin-bottom: 28px;
+  position: relative;
+  overflow: hidden;
+}
+.hero h1 {
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+.search {
+  max-width: 440px;
+  margin: 18px auto 0;
+}
+.cols {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 24px;
+  align-items: start;
+}
+.cat {
+  margin-bottom: 22px;
+}
+.catH {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--fg-3);
+  margin-bottom: 12px;
+}
+.catH svg { color: var(--accent); }
+.docList {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.docItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: all var(--dur) var(--ease);
+  text-decoration: none;
+  color: inherit;
+}
+.docItem:hover {
+  background: var(--glass-fill-hover);
+  border-color: var(--glass-border-bright);
+  transform: translateX(3px);
+}
+.arw { margin-left: auto; color: var(--fg-4); }
+.contactCard { padding: 20px; }
+.contactOpt {
+  display: flex;
+  gap: 13px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--glass-border);
+}
+.contactOpt:last-child { border-bottom: none; }
+.contactIco {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm);
+  background: var(--glass-fill-strong);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent);
+  flex: none;
+}
+
+@media (max-width: 860px) {
+  .cols { grid-template-columns: 1fr; }
+}
+
+/* An article that opens the legal modal is a button; same look as the links. */
+button.docItem {
+  width: 100%;
+  font: inherit;
+  text-align: left;
+}

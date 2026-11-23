@@ -1,0 +1,79 @@
+/* /terminos and /privacidad — the legal documents as pages. The reading layout
+   (index, clauses) is shared with the modal: features/legal/LegalModal.module.css. */
+
+.page {
+  min-height: 100vh;
+  background: var(--canvas-0);
+}
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 14px 32px;
+  border-bottom: 1px solid var(--glass-border);
+  background: var(--canvas-0);
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--fg-1);
+}
+.tabs {
+  display: flex;
+  gap: 4px;
+}
+.tabs a {
+  padding: 7px 12px;
+  border-radius: var(--r-md);
+  color: var(--fg-3);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: all var(--dur) var(--ease);
+}
+.tabs a:hover,
+.tabs a.current {
+  color: var(--fg-1);
+  background: var(--glass-fill);
+}
+
+.main {
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 0 32px 64px;
+}
+
+/* The modal's .intro h2 / .section h3 looks, on the page's real heading levels (h1, h2). */
+.title {
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin: 10px 0 0;
+}
+.clause {
+  color: var(--fg-1);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0 0 10px;
+  scroll-margin-top: 72px;
+}
+
+@media (max-width: 860px) {
+  .top,
+  .main {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .title {
+    font-size: 24px;
+  }
+}

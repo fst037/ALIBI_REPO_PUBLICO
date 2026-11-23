@@ -1,0 +1,231 @@
+name: Deploy ALIBI infrastructure
+
+# Single click-button apply for backend + frontend + ML dev infra (unified
+# Terraform root: terraform/envs/dev). Runs on GitHub's runners, not behind
+# the Zscaler proxy that blocks Terraform from the user's own machine. It
+# assumes the one-time state bootstrap has already happened.
+#
+# Requires two one-time manual setup steps:
+#   1. Repo variable AWS_CI_DEPLOY_ROLE_ARN — output of
+#      `terraform apply -target=module.ci_deploy_role` from your own terminal.
+#   2. Repo secret GH_VARIABLES_PAT — a fine-grained PAT scoped to this repo
+#      with "Variables" read/write permission. The default GITHUB_TOKEN
+#      cannot write repo Settings → Actions → Variables regardless of the
+#      `permissions:` block below (hard GitHub platform limitation), so
+#      the auto-set-variables step needs a real PAT.
+#   3. Repo variable ALIBI_ALERT_EMAIL — email for the ML budget alert
+#      (module.ml_billing requires it, no default).
+
+on:
+  workflow_dispatch:
+    inputs:
+      deploy_backend:
+        description: "Deploy backend (Lambda + API Gateway)"
+        type: boolean
+        default: true
+      deploy_frontend:
+        description: "Deploy frontend (S3 + CloudFront)"
+        type: boolean
+        default: true
+      deploy_ml:
+        description: "Deploy ML core (storage, IAM, billing, ingestion) — training/inference/mlflow-server are NOT part of this job, see ml-deploy.yml"
+        type: boolean
+        default: true
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: alibi-unified-terraform
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/dev
+    env:
+      TF_VAR_alert_email: ${{ vars.ALIBI_ALERT_EMAIL }}
+      # Module A + orchestrator, on AWS Bedrock (AWS-only since 2026-10-05).
+      # Only the on/off switch comes from the repo: the model ids and the prompt
+      # format are Terraform variables with defaults (terraform/envs/dev/
+      # variables.tf), and there are no keys at all — Bedrock authorises the
+      # Lambdas' IAM roles. Passing an unset repo variable here would hand
+      # Terraform an empty string, which OVERRIDES its default rather than
+      # falling back to it, so the ids are deliberately not wired through.
+      # `|| 'false'`, not a bare passthrough: an empty string isn't a valid
+      # Terraform bool.
+      TF_VAR_text2sql_enabled: ${{ vars.ALIBI_TEXT2SQL_ENABLED || 'false' }}
+      # The mailbox the verification code is sent from (app/core/mailer.py) —
+      # plain SMTP, no mail service. The password is a Gmail *app password*,
+      # so it is a secret; the address is a plain variable. Unset = the code is
+      # only logged and nobody can finish registering.
+      TF_VAR_smtp_user: ${{ vars.ALIBI_SMTP_USER }}
+      TF_VAR_smtp_password: ${{ secrets.ALIBI_SMTP_PASSWORD }}
+      # "Continuar con Google": the OAuth client id ID tokens are checked
+      # against. Not a secret — the browser holds it too (frontend-deploy.yml).
+      # Unset = no Google sign-in; email and password are unaffected.
+      TF_VAR_google_client_id: ${{ vars.ALIBI_GOOGLE_CLIENT_ID }}
+      # Mercado Pago Checkout Pro: the seller application's access token. A TEST
+      # token (credenciales de prueba) is the sandbox — no money moves. A secret.
+      # Unset = paying for a plan is a 503; Free is unaffected.
+      TF_VAR_mp_access_token: ${{ secrets.ALIBI_MP_ACCESS_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      # Module B's processor Lambda is a container image, and Lambda validates
+      # that image exists at CreateFunction time — so on a from-scratch ingest
+      # deploy, the ECR repo must exist and hold at least one image before the
+      # main apply below can create the function. This used to be a three-step
+      # runbook run from a developer's own terminal with local Docker
+      # (backend/terraform/modules/ingest-pipeline/README.md); it's inlined
+      # here instead so routine deploys never need local Docker or Terraform
+      # again. Idempotent and self-healing: skipped
+      # entirely when `ingest_enabled` isn't set, a no-op once a real image
+      # already exists (checked against ECR directly, not Terraform state, so
+      # it recovers even if the repo were ever destroyed and recreated).
+      - name: Bootstrap the ingest processor image (first run only)
+        # NOT `== 'true'`: workflow_dispatch boolean inputs are real booleans
+        # in `if:`'s expression context (unlike inside a `run:` block, where
+        # ${{ }} interpolation stringifies first — see the bash comparisons
+        # below). Comparing a boolean to the string 'true' coerces both sides
+        # to numbers (true -> 1, 'true' -> NaN) and is always false, which is
+        # why this step silently no-op'd on the first real run instead of
+        # bootstrapping the image.
+        if: inputs.deploy_backend
+        run: |
+          set -e
+          if ! grep -qE '^\s*ingest_enabled\s*=\s*true\s*$' terraform.tfvars 2>/dev/null; then
+            echo "ingest_enabled is not set in terraform.tfvars — Module B is off, nothing to bootstrap."
+            exit 0
+          fi
+
+          terraform apply -auto-approve -target='module.ingest[0].aws_ecr_repository.processor'
+
+          REPO_URL=$(terraform output -raw ingest_ecr_repository_url)
+          REPO_NAME="${REPO_URL##*/}"
+
+          # Ask the question Lambda actually asks. This used to test "does the
+          # repo hold ANY image", which is a different question and diverged on
+          # 2026-08-28: the lifecycle policy had expired `:bootstrap` while five
+          # CI images remained, so this step reported "nothing to bootstrap" and
+          # the apply then failed to create the function against a tag that no
+          # longer resolved. The tag is what gets pinned, so the tag is what
+          # gets checked.
+          if aws ecr describe-images --repository-name "$REPO_NAME" --region us-east-1 \
+               --image-ids imageTag=bootstrap >/dev/null 2>&1; then
+            echo "$REPO_NAME already has a :bootstrap image — nothing to bootstrap."
+            exit 0
+          fi
+
+          # If real images exist, the cheap repair is to re-point :bootstrap at
+          # the newest one rather than spend ~10 min rebuilding a 363 MB image
+          # whose layers are already in the registry.
+          LATEST_MANIFEST=$(aws ecr batch-get-image --repository-name "$REPO_NAME" --region us-east-1 \
+            --image-ids imageTag=latest --query 'images[0].imageManifest' --output text 2>/dev/null || true)
+
+          if [ -n "$LATEST_MANIFEST" ] && [ "$LATEST_MANIFEST" != "None" ]; then
+            echo "$REPO_NAME has no :bootstrap tag but does have :latest — retagging it."
+            aws ecr put-image --repository-name "$REPO_NAME" --region us-east-1 \
+              --image-tag bootstrap --image-manifest "$LATEST_MANIFEST" >/dev/null
+            exit 0
+          fi
+
+          echo "$REPO_NAME has no usable image — building and pushing a bootstrap image."
+          REGISTRY="${REPO_URL%%/*}"
+          aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin "$REGISTRY"
+          docker build -f ../../../backend/Dockerfile.processor -t "$REPO_URL:bootstrap" ../../../backend
+          docker push "$REPO_URL:bootstrap"
+
+      - name: Build apply targets
+        id: targets
+        run: |
+          if [ "${{ inputs.deploy_backend }}" = "true" ] && \
+             [ "${{ inputs.deploy_frontend }}" = "true" ] && \
+             [ "${{ inputs.deploy_ml }}" = "true" ]; then
+            echo "args=" >> "$GITHUB_OUTPUT"
+          else
+            ARGS="-target=module.ci_deploy_role"
+            if [ "${{ inputs.deploy_backend }}" = "true" ]; then
+              ARGS="$ARGS -target=module.backend -target=module.ingest"
+            fi
+            if [ "${{ inputs.deploy_frontend }}" = "true" ]; then
+              ARGS="$ARGS -target=module.frontend"
+            fi
+            if [ "${{ inputs.deploy_ml }}" = "true" ]; then
+              ARGS="$ARGS -target=module.ml_iam -target=module.ml_storage -target=module.ml_billing -target=module.ml_ingestion_lambda"
+            fi
+            echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve ${{ steps.targets.outputs.args }}
+
+      - name: Read outputs
+        run: terraform output -json > outputs.json
+
+      - name: Auto-populate repo variables from outputs
+        env:
+          GH_TOKEN: ${{ secrets.GH_VARIABLES_PAT }}
+        run: |
+          set_var() {
+            name="$1"
+            value="$2"
+            if [ -n "$value" ] && [ "$value" != "null" ]; then
+              gh variable set "$name" --body "$value"
+            fi
+          }
+
+          set_var AWS_CI_DEPLOY_ROLE_ARN "$(jq -r '.ci_deploy_role_arn.value' outputs.json)"
+
+          if [ "${{ inputs.deploy_backend }}" = "true" ]; then
+            set_var AWS_BACKEND_LAMBDA_NAME "$(jq -r '.backend_function_name.value' outputs.json)"
+            set_var AWS_BACKEND_CODE_BUCKET "$(jq -r '.backend_code_bucket.value' outputs.json)"
+            # Module B. Empty when ingest_enabled is false, and set_var skips
+            # empties — so backend-deploy.yml's ingest steps stay switched off
+            # until the pipeline actually exists.
+            set_var AWS_INGEST_BUCKET "$(jq -r '.ingest_bucket.value' outputs.json)"
+            set_var AWS_INGEST_PROCESSOR_NAME "$(jq -r '.ingest_processor_function_name.value' outputs.json)"
+            set_var AWS_INGEST_COMMITTER_NAME "$(jq -r '.ingest_committer_function_name.value' outputs.json)"
+            set_var AWS_INGEST_ECR_URL "$(jq -r '.ingest_ecr_repository_url.value' outputs.json)"
+            # Module A + orchestrator. Empty when text2sql_enabled is off —
+            # set_var skips empties, so backend-deploy.yml's bridge-update
+            # step stays switched off until the bridge Lambda actually exists.
+            set_var AWS_LLM_BRIDGE_FUNCTION_NAME "$(jq -r '.llm_bridge_function_name.value' outputs.json)"
+            # The answer-run worker, same skip-when-empty rule.
+            set_var AWS_RUN_WORKER_FUNCTION_NAME "$(jq -r '.run_worker_function_name.value' outputs.json)"
+          fi
+
+          if [ "${{ inputs.deploy_frontend }}" = "true" ]; then
+            set_var AWS_FRONTEND_BUCKET "$(jq -r '.frontend_bucket_name.value' outputs.json)"
+            set_var AWS_CLOUDFRONT_DISTRIBUTION_ID "$(jq -r '.frontend_distribution_id.value' outputs.json)"
+          fi
+
+          # Consumed by ml-deploy.yml/ml-train.yml/ml-destroy.yml as
+          # TF_VAR_sagemaker_role_arn etc. — see ML/terraform/envs/dev/variables.tf's
+          # "Cross-root inputs" section.
+          if [ "${{ inputs.deploy_ml }}" = "true" ]; then
+            set_var AWS_ML_SAGEMAKER_ROLE_ARN "$(jq -r '.ml_sagemaker_role_arn.value' outputs.json)"
+            set_var AWS_ML_DATASETS_BUCKET "$(jq -r '.ml_datasets_bucket.value' outputs.json)"
+            set_var AWS_ML_ARTIFACTS_BUCKET "$(jq -r '.ml_artifacts_bucket.value' outputs.json)"
+          fi
+
+      - name: Show endpoints
+        run: |
+          terraform output backend_api_endpoint || true
+          terraform output frontend_site_url || true

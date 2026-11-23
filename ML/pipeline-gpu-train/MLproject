@@ -1,0 +1,34 @@
+# MLflow Project for Module A's GPU stages (train, test_model). Separate
+# project directory from ../pipeline-cpu-data because MLflow Projects scope
+# one environment per project directory — this is the heavy half
+# (requirements_qlora.txt: torch/transformers/peft/bitsandbytes/trl).
+# Driven together with the CPU/data half by
+# ../src/model_a/pipeline/run_pipeline.py.
+
+name: alibi-model-a-gpu-train
+python_env: ../environments/gpu-train-env.yaml
+
+entry_points:
+  train:
+    parameters:
+      data_dir: { type: string, default: "../data/processed/model_a" }
+      run_id: { type: string, default: "local" }
+      dummy: { type: string, default: "true" }
+      artifact_s3_uri: { type: string, default: "" }
+      base_model_id: { type: string, default: "Qwen/Qwen2.5-Coder-7B-Instruct" }
+      epochs: { type: float, default: 3 }
+      lora_r: { type: float, default: 64 }
+      lora_alpha: { type: float, default: 128 }
+      sample_fraction: { type: string, default: "1.0" }
+    command: "python ../src/model_a/pipeline/train.py --data-dir {data_dir} --run-id {run_id} --dummy {dummy} --artifact-s3-uri {artifact_s3_uri} --base-model-id {base_model_id} --epochs {epochs} --lora-r {lora_r} --lora-alpha {lora_alpha} --sample-fraction {sample_fraction}"
+
+  test_model:
+    parameters:
+      model_dir: { type: string, default: "" }
+      run_id: { type: string, default: "eval" }
+      spider_eval_path: { type: string, default: "" }
+      spider_db_dir: { type: string, default: "" }
+      bird_eval_path: { type: string, default: "" }
+      bird_db_dir: { type: string, default: "" }
+      guardrail_sample_size: { type: float, default: 50 }
+    command: "python ../src/model_a/pipeline/test_model.py --model-dir {model_dir} --run-id {run_id} --spider-eval-path {spider_eval_path} --spider-db-dir {spider_db_dir} --bird-eval-path {bird_eval_path} --bird-db-dir {bird_db_dir} --guardrail-sample-size {guardrail_sample_size}"

@@ -1,0 +1,463 @@
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+  flex-wrap: wrap;
+}
+
+/* Drag-and-drop feedback for folder tiles. Fixed to the viewport (not the
+   scroll container) so a toast stays put even if the grid underneath it
+   scrolls; `.app`'s ancestor chain has no transform/filter, so `fixed` here
+   really does anchor to the viewport rather than getting trapped early. */
+.toastStack {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 300;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  pointer-events: none;
+}
+.toastItem { pointer-events: auto; }
+.limit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+}
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 16px;
+}
+.topActions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.dcard {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill);
+  border: 1px solid var(--glass-border);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+  text-align: left;
+  font-family: var(--font-sans);
+  color: inherit;
+}
+.dcard:hover {
+  background: var(--glass-fill-hover);
+  border-color: var(--glass-border-bright);
+  transform: translateY(-3px);
+  box-shadow: 0 20px 46px -24px rgba(0, 0, 0, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+.dcard:focus-visible {
+  outline: none;
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+/* The card actively being dragged toward a folder tile — dimmed so the tile
+   it's headed for (`.tile.dropHover` in folders.module.css) reads as the
+   thing to look at, not the card itself. */
+.dcard.dragging {
+  opacity: 0.45;
+  transform: scale(0.97);
+}
+/* Multi-select mode. */
+.dcard.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--glass-fill));
+}
+.cardCheckbox {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--glass-border-bright);
+  color: transparent;
+  background: var(--canvas-2);
+  transition: all var(--dur) var(--ease);
+}
+.cardCheckbox.checked {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+/* The bar that appears under the toolbar while selecting — count + bulk
+   actions. Only rendered while `selectMode` is on, so it never competes with
+   the ordinary toolbar for space. */
+.selectBar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  margin-bottom: 18px;
+  border-radius: var(--r-md);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--fg-1);
+  font-size: 13px;
+}
+.selectBarActions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Card top-right cluster: favorite + status */
+.cardTop {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* `processed` cards: a dot in a soft tinted circle instead of the full
+   labelled `Pill` — see the note at the call site. Same visual family as
+   `.pill-ok` (soft background + matching border), just compact and round
+   instead of the oval a `.pill` becomes once it has no text to size around. */
+.statusDot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--ok-soft);
+  border: 1px solid rgba(56, 232, 160, 0.3);
+  flex: none;
+}
+.statusDot::before {
+  content: '';
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+}
+.favBtn {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--fg-4);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+              border-color var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.favBtn:hover {
+  background: var(--glass-fill-strong);
+  border-color: var(--glass-border);
+  color: var(--accent);
+  transform: scale(1.08);
+}
+.favOn {
+  color: var(--accent);
+}
+.favOn:hover {
+  color: var(--accent);
+}
+
+/* Card actions row */
+.cardActions {
+  display: flex;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 13px;
+  border-top: 1px solid var(--glass-border);
+}
+.consultBtn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  color: var(--accent);
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), border-color var(--dur) var(--ease),
+              box-shadow var(--dur) var(--ease), transform var(--dur-fast) var(--ease);
+}
+.consultBtn:hover {
+  background: rgba(39, 245, 169, 0.18);
+  border-color: var(--accent);
+  box-shadow: 0 8px 22px -10px var(--accent-glow);
+  transform: translateY(-1px);
+}
+/* "Confirm" on an unconfirmed dataset — same warn tone as the "Unconfirmed"
+   pill (`.pill-warn` in tokens.css), so the card's own action
+   reads as belonging to the same state it's fixing, not a generic primary
+   action that happens to sit on a warn-flagged card. */
+.consultBtn.warn {
+  background: var(--warn-soft);
+  border-color: rgba(255, 197, 110, 0.3);
+  color: var(--warn);
+}
+.consultBtn.warn:hover {
+  background: rgba(255, 197, 110, 0.22);
+  border-color: var(--warn);
+  box-shadow: 0 8px 22px -10px rgba(255, 197, 110, 0.55);
+}
+.delBtn {
+  width: 36px;
+  height: 36px;
+  flex: none;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+  color: var(--fg-3);
+  cursor: pointer;
+  transition: background var(--dur) var(--ease), color var(--dur) var(--ease),
+              border-color var(--dur) var(--ease);
+}
+.delBtn:hover {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Per-card options menu ("..."). Portalled to <body> (see Biblioteca.tsx),
+   not nested in the card: `.page-scroll` clips anything extending past its
+   own box regardless of the popover's own `position`, since clipping follows
+   DOM containment, not layout position — the same reason `folders.module.css`
+   `.menu`/`.menuScrim` are portalled rather than nested in their tile. */
+.cardMenuScrim {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+}
+.cardMenu {
+  position: fixed;
+  z-index: 201;
+  min-width: 190px;
+  display: flex;
+  flex-direction: column;
+  padding: 5px;
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  background: var(--canvas-2);
+  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5);
+}
+.cardMenu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: none;
+  color: var(--fg-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+}
+.cardMenu button:hover { background: var(--glass-fill); color: var(--fg-1); }
+.cardMenu button.danger { color: var(--danger); }
+
+/* Empty state */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--fg-3);
+  font-size: 13.5px;
+  text-align: center;
+}
+.dcardIco {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--r-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+.dcardIco.csv { background: rgba(56, 232, 160, 0.14); color: var(--ok); }
+.dcardIco.xlsx { background: rgba(79, 210, 255, 0.14); color: var(--data-2); }
+.dcardIco.pdf { background: rgba(255, 122, 133, 0.14); color: var(--danger); }
+.dcardName {
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dcardStats {
+  display: flex;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 12px;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+
+/* Drawer */
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(6, 6, 8, 0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  z-index: 120;
+  display: flex;
+  justify-content: flex-end;
+}
+.drawer {
+  width: 460px;
+  max-width: 92vw;
+  height: 100%;
+  background: var(--canvas-1);
+  border-left: 1px solid var(--glass-border-bright);
+  display: flex;
+  flex-direction: column;
+  box-shadow: -30px 0 80px -30px rgba(0, 0, 0, 0.8);
+}
+.drawerHead {
+  padding: 22px 24px;
+  border-bottom: 1px solid var(--glass-border);
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+.drawerBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px 24px;
+}
+.drawerFoot {
+  padding: 16px 24px;
+  border-top: 1px solid var(--glass-border);
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.metaGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+.metaBox {
+  padding: 13px 15px;
+  border-radius: var(--r-md);
+  background: var(--glass-fill-strong);
+  border: 1px solid var(--glass-border);
+}
+.metaV {
+  font-size: 18px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  letter-spacing: -0.01em;
+}
+.metaL {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+.schList {
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r-md);
+  overflow: hidden;
+}
+.schItem {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+.schItem:last-child {
+  border-bottom: none;
+}
+.schType {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: var(--r-pill);
+  background: var(--glass-fill-strong);
+  color: var(--fg-2);
+  border: 1px solid var(--glass-border);
+  flex: none;
+}
+
+/* Delete confirmation modal */
+.confirm {
+  padding: 30px 28px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.confirmIco {
+  width: 52px;
+  height: 52px;
+  border-radius: 999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--danger-soft);
+  color: var(--danger);
+  margin-bottom: 16px;
+}
+.confirmTitle {
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin-bottom: 7px;
+}
+.confirmText {
+  font-size: 13px;
+  color: var(--fg-3);
+  line-height: 1.5;
+  max-width: 340px;
+  margin-bottom: 22px;
+}
+.confirmActions {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+.confirmActions > * {
+  flex: 1;
+  justify-content: center;
+}
+.confirmActions .danger {
+  background: var(--danger-soft);
+  border-color: var(--danger);
+  color: var(--danger);
+}
+.confirmActions .danger:hover {
+  background: rgba(255, 122, 133, 0.22);
+  border-color: var(--danger);
+  color: var(--danger);
+}

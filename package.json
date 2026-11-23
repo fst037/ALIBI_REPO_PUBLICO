@@ -1,0 +1,20 @@
+{
+  "name": "alibi-contracts",
+  "private": true,
+  "version": "0.0.0",
+  "description": "ALIBI API contracts (OpenAPI 3.0.3 per domain) + codegen tooling: Redocly (bundle/lint), Prism (mock server), Orval (typed client for the frontend seam).",
+  "type": "module",
+  "scripts": {
+    "contracts:bundle": "redocly bundle contracts/root.yaml -o contracts/openapi.yaml",
+    "contracts:lint": "redocly lint contracts/openapi.yaml",
+    "contracts:preview": "redocly preview-docs contracts/openapi.yaml",
+    "api:mock": "prism mock contracts/openapi.yaml --port 4010",
+    "api:generate": "orval --config orval.config.ts",
+    "contracts:build": "npm run contracts:bundle && npm run contracts:lint && npm run api:generate"
+  },
+  "devDependencies": {
+    "@redocly/cli": "^1.34.2",
+    "@stoplight/prism-cli": "^5.14.2",
+    "orval": "^7.13.0"
+  }
+}

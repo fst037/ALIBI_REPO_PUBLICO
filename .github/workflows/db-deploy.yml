@@ -1,0 +1,86 @@
+name: Deploy ALIBI database
+
+# Standalone apply for the RDS PostgreSQL database
+# (terraform/envs/database) — deliberately separate from
+# infra-deploy.yml/infra-destroy.yml (unified backend+frontend+ML root).
+# This root holds real data and is never destroyed by automation: there is
+# no db-destroy.yml.
+#
+# Requires the same one-time setup as infra-deploy.yml:
+# repo variable AWS_CI_DEPLOY_ROLE_ARN and repo secret GH_VARIABLES_PAT.
+# The CI role's IAM policy (terraform/modules/ci-deploy-role) must already
+# include the RDS + this state key's S3 prefix permissions added alongside
+# this workflow — if applying for the first time, run
+# `terraform apply -target=module.ci_deploy_role` from terraform/envs/dev
+# first so the live role matches before this workflow's first run.
+
+on:
+  workflow_dispatch: {}
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: alibi-database-terraform
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform/envs/database
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      # One-time reconciliation: an earlier run's CreateDBInstance call
+      # succeeded in AWS but the job failed/died before Terraform recorded
+      # it in state, so a plain `apply` sees a fresh create and collides
+      # with DBInstanceAlreadyExists. Import is a no-op (harmless failure,
+      # swallowed) once state already has the resource — safe to leave in
+      # permanently, but remove once confirmed unnecessary going forward.
+      - name: Import pre-existing DB instance if not already in state
+        run: terraform import module.database.aws_db_instance.this alibi-dev || true
+
+      - name: Terraform apply
+        run: terraform apply -auto-approve
+
+      - name: Read outputs
+        run: terraform output -json > outputs.json
+
+      - name: Auto-populate repo variables from outputs
+        env:
+          GH_TOKEN: ${{ secrets.GH_VARIABLES_PAT }}
+        run: |
+          set_var() {
+            name="$1"
+            value="$2"
+            if [ -n "$value" ] && [ "$value" != "null" ]; then
+              gh variable set "$name" --body "$value"
+            fi
+          }
+
+          set_var AWS_DB_INSTANCE_ARN "$(jq -r '.db_instance_arn.value' outputs.json)"
+          set_var AWS_DB_SECRET_ARN "$(jq -r '.db_secret_arn.value' outputs.json)"
+          set_var AWS_DB_NAME "$(jq -r '.db_name.value' outputs.json)"
+          set_var AWS_BASTION_INSTANCE_ID "$(jq -r '.bastion_instance_id.value' outputs.json)"
+
+      - name: Show instance ARN and endpoint
+        run: |
+          terraform output db_instance_arn || true
+          terraform output db_endpoint || true
+          terraform output bastion_instance_id || true

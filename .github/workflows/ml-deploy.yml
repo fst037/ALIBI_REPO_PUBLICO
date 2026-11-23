@@ -1,0 +1,318 @@
+name: Deploy ALIBI ML infrastructure
+
+# Click-button apply for ML/terraform/envs/dev (a separate Terraform root
+# from the unified terraform/envs/dev; ML training/inference is
+# excluded from the unified root). Runs on GitHub's runners, not behind the
+# Zscaler proxy that blocks Terraform from the user's own
+# machine. Deliberately does NOT auto-launch a real training job or destroy
+# anything — see ml-train.yml / ml-destroy.yml for those.
+#
+# endpoint_action serves ONE training run on the `model-a3-dev` endpoint. It lives
+# here, not in its own workflow, because GitHub only registers a workflow_dispatch
+# workflow once the file exists on the default branch — ml-deploy.yml already does.
+# A training job's model.tar.gz holds only the LoRA adapter; the inference
+# container also needs code/inference.py (+ requirements) INSIDE the tarball, so
+# the deploy path repackages it. Re-running deploy with another training_job_name
+# swaps the model on the same endpoint (stable name; model/config names carry the
+# run so Terraform can create-before-destroy).
+#
+# There is deliberately no "deploy core" toggle here. IAM, storage, billing and
+# the ingestion Lambda belong to the unified root (terraform/envs/dev) as
+# module.ml_iam/ml_storage/ml_billing/ml_ingestion_lambda — this root has not
+# declared them since 2026-09-06. Deploy them with
+# infra-deploy.yml's deploy_ml toggle, which also populates the AWS_ML_* repo
+# variables the env block below reads.
+#
+# One-time setup this workflow assumes already exists:
+#   1. Repo variable AWS_CI_DEPLOY_ROLE_ARN (shared with the unified root's
+#      infra-deploy.yml and the database root's db-deploy.yml — one CI role
+#      covers all three Terraform roots, see terraform/modules/ci-deploy-role).
+#   2. Repo variables AWS_ML_SAGEMAKER_ROLE_ARN / AWS_ML_DATASETS_BUCKET /
+#      AWS_ML_ARTIFACTS_BUCKET — populated by infra-deploy.yml's deploy_ml
+#      toggle.
+#   3. Repo secret HF_TOKEN — optional, only for gated HuggingFace models.
+
+on:
+  workflow_dispatch:
+    inputs:
+      generate_training_job:
+        description: "Regenerate training_job_<run_id>.json from terraform.tfvars (writes local files only — does not submit a job, see ml-train.yml)"
+        type: boolean
+        default: false
+      package_and_upload_code:
+        description: "Package model_a/ + common/ and upload to S3 (prerequisite for any real training run)"
+        type: boolean
+        default: false
+
+      endpoint_action:
+        description: "Inference endpoint: none | list (show completed training jobs, free) | deploy (serve one — bills ~$1.9/hr while its copy is up; scales to zero after ~15 idle minutes)"
+        type: choice
+        options: [none, list, deploy]
+        default: none
+      training_job_name:
+        description: "endpoint_action=deploy: the Module A (sql) job, exact name from the list (e.g. model-a-dev-smoke-27b-004). Default: the trained final Module A model (qlora-001); blank = most recent completed model-a job."
+        required: false
+        default: "model-a-dev-qlora-001"
+      chart_job_name:
+        description: "endpoint_action=deploy: OPTIONAL Module C (chart) job to serve alongside it as a second adapter on the same base model, e.g. model-c-dev-smoke-c-001. Default: the trained final Module C model (qlora-002); blank = SQL only."
+        required: false
+        default: "model-c-dev-qlora-002"
+      inference_instance_types:
+        description: "endpoint_action=deploy: instance types in priority order, comma-separated (1-5). SageMaker takes the first with capacity. Default = the list that got a GPU on 2026-10-20."
+        required: false
+        default: "ml.g5.2xlarge,ml.g6e.xlarge,ml.g5.4xlarge,ml.g6e.2xlarge,ml.g6.2xlarge"
+      endpoint_confirm:
+        description: "endpoint_action=deploy: type DEPLOY (starts a billed GPU endpoint)"
+        required: false
+        default: ""
+
+permissions:
+  id-token: write # required for AWS OIDC
+  contents: read
+
+concurrency:
+  group: alibi-ml-terraform
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ML/terraform/envs/dev
+    env:
+      TF_VAR_hf_token: ${{ secrets.HF_TOKEN }}
+      # IAM/storage now live in the unified root — see ML/terraform/envs/dev/
+      # variables.tf's "Cross-root inputs" section. Populated automatically by
+      # infra-deploy.yml's deploy_ml toggle; run that at least once first.
+      TF_VAR_sagemaker_role_arn: ${{ vars.AWS_ML_SAGEMAKER_ROLE_ARN }}
+      TF_VAR_datasets_bucket: ${{ vars.AWS_ML_DATASETS_BUCKET }}
+      TF_VAR_artifacts_bucket: ${{ vars.AWS_ML_ARTIFACTS_BUCKET }}
+      ARTIFACTS_BUCKET: ${{ vars.AWS_ML_ARTIFACTS_BUCKET }}
+      ENDPOINT_NAME: model-a3-dev
+      # The inference component the endpoint hosts (ML/terraform/modules/inference):
+      # every invocation names it, and it is what scales to zero.
+      IC_NAME: model-a3-dev-models
+      # HF GPU inference container with transformers 5 (the handler's requirements.txt raises it to >=5.8).
+      INFERENCE_IMAGE: 763104351884.dkr.ecr.us-east-1.amazonaws.com/huggingface-pytorch-inference:2.6.0-transformers5.5.3-gpu-py312-cu124-ubuntu22.04-v2.1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_CI_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: Terraform init
+        run: terraform init
+
+      - name: Build apply targets
+        id: targets
+        run: |
+          ARGS=""
+          if [ "${{ inputs.generate_training_job }}" = "true" ]; then
+            ARGS="$ARGS -target=module.training"
+          fi
+          if [ -z "$ARGS" ] && [ "${{ inputs.package_and_upload_code }}" != "true" ] && [ "${{ inputs.endpoint_action }}" = "none" ]; then
+            echo "Nothing selected — pick generate_training_job, package_and_upload_code or an endpoint_action." >&2
+            exit 1
+          fi
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+
+      - name: Terraform apply
+        if: steps.targets.outputs.args != ''
+        run: terraform apply -auto-approve ${{ steps.targets.outputs.args }}
+
+      - name: Package and upload training code
+        if: inputs.package_and_upload_code
+        run: |
+          # Straight from the repo variable, NOT `terraform output`. The bucket is
+          # a cross-root input this root only passes through, so asking Terraform
+          # for it back was pointless indirection — and it breaks outright when
+          # this step runs on its own: with no deploy_* toggle selected there is
+          # no apply, the state has no outputs, and `terraform output -raw` prints
+          # a "No outputs found" warning that command substitution happily
+          # captures as the bucket name.
+          ARTIFACTS_BUCKET="${{ vars.AWS_ML_ARTIFACTS_BUCKET }}"
+          if [ -z "$ARTIFACTS_BUCKET" ]; then
+            echo "AWS_ML_ARTIFACTS_BUCKET is not set — run infra-deploy.yml with deploy_ml=true first." >&2
+            exit 1
+          fi
+
+          # requirements.txt goes in at the tarball ROOT — SageMaker script mode
+          # pip-installs it from there before running sagemaker_program.
+          tar -czf /tmp/model_a.tar.gz -C ../../../src model_a/ common/ requirements.txt
+          aws s3 cp /tmp/model_a.tar.gz "s3://${ARTIFACTS_BUCKET}/code/model_a.tar.gz"
+          echo "Uploaded -> s3://${ARTIFACTS_BUCKET}/code/model_a.tar.gz"
+
+      - name: List completed training jobs
+        if: inputs.endpoint_action != 'none'
+        run: |
+          {
+            echo "### Completed training jobs (newest first)"
+            echo ""
+            echo "| Job | Task | Base model | Data | Finished | Final eval loss |"
+            echo "|---|---|---|---|---|---|"
+          } > "$GITHUB_STEP_SUMMARY"
+          aws sagemaker list-training-jobs --status-equals Completed --name-contains=-dev- \
+            --sort-by CreationTime --sort-order Descending --max-results 20 \
+            --query 'TrainingJobSummaries[].TrainingJobName' --output text | tr '\t' '\n' > jobs.txt
+          if [ ! -s jobs.txt ]; then echo "No completed training jobs found." | tee -a "$GITHUB_STEP_SUMMARY"; exit 1; fi
+          while read -r J; do
+            D=$(aws sagemaker describe-training-job --training-job-name "$J")
+            BASE=$(echo "$D" | jq -r '.HyperParameters.base_model_id // "Qwen/Qwen3.8-27B (default)"')
+            FRAC=$(echo "$D" | jq -r '.HyperParameters.sample_fraction // "1.0"')
+            TASK=$(echo "$D" | jq -r '.HyperParameters.task // "sql"')
+            END=$(echo "$D" | jq -r '.TrainingEndTime[0:16]')
+            EVAL=$(echo "$D" | jq -r '[.FinalMetricDataList[]? | select(.MetricName=="eval:loss") | .Value][0] // "-"')
+            KIND="full"; if [ "$FRAC" != "1.0" ] && [ "$FRAC" != "1" ]; then KIND="SMOKE ($FRAC)"; fi
+            echo "| \`$J\` | $TASK | $BASE | $KIND | $END | $EVAL |" | tee -a "$GITHUB_STEP_SUMMARY"
+          done < jobs.txt
+
+      - name: Resolve the job(s) to deploy
+        if: inputs.endpoint_action == 'deploy'
+        run: |
+          if [ "${{ inputs.endpoint_confirm }}" != "DEPLOY" ]; then
+            echo "Type DEPLOY in 'endpoint_confirm' to start a billed endpoint." >&2; exit 1
+          fi
+          # check_job <name> <expected task>: Completed, right task, echoes "<artifact> <base>"
+          check_job() {
+            D=$(aws sagemaker describe-training-job --training-job-name "$1")
+            STATUS=$(echo "$D" | jq -r .TrainingJobStatus)
+            TASK=$(echo "$D" | jq -r '.HyperParameters.task // "sql"')
+            if [ "$STATUS" != "Completed" ]; then echo "$1 is $STATUS, not Completed." >&2; exit 1; fi
+            if [ "$TASK" != "$2" ]; then echo "$1 was trained for task '$TASK', expected '$2'." >&2; exit 1; fi
+            echo "$(echo "$D" | jq -r .ModelArtifacts.S3ModelArtifacts) $(echo "$D" | jq -r '.HyperParameters.base_model_id // "default"')"
+          }
+          JOB="${{ inputs.training_job_name }}"
+          if [ -z "$JOB" ]; then JOB=$(grep '^model-a-' jobs.txt | head -n1); echo "No sql job given - using the most recent: $JOB"; fi
+          read -r ART BASE <<< "$(check_job "$JOB" sql)"
+          DEPLOY_ID="${JOB#model-a-dev-}"
+          CHART_JOB="${{ inputs.chart_job_name }}"
+          CHART_ART=""
+          if [ -n "$CHART_JOB" ]; then
+            read -r CHART_ART CHART_BASE <<< "$(check_job "$CHART_JOB" chart)"
+            if [ "$BASE" != "$CHART_BASE" ]; then
+              echo "The two adapters were trained on different bases ($BASE vs $CHART_BASE); one endpoint can only serve adapters of one base." >&2; exit 1
+            fi
+            DEPLOY_ID="${DEPLOY_ID}-${CHART_JOB#model-c-dev-}"
+          fi
+          DEPLOY_ID=$(echo "$DEPLOY_ID" | cut -c1-40)
+          { echo "JOB=$JOB"; echo "ART=$ART"; echo "CHART_JOB=$CHART_JOB"; echo "CHART_ART=$CHART_ART"; echo "DEPLOY_ID=$DEPLOY_ID"; } >> "$GITHUB_ENV"
+          echo "Deploying sql=$JOB chart=${CHART_JOB:-<none>} (base $BASE) as $DEPLOY_ID"
+
+      - name: Package adapters + inference handler
+        if: inputs.endpoint_action == 'deploy'
+        working-directory: .
+        run: |
+          mkdir -p pkg/model/adapters/sql pkg/model/code/common && cd pkg
+          aws s3 cp "$ART" sql.tar.gz && tar -xzf sql.tar.gz -C model/adapters/sql
+          if [ -n "$CHART_ART" ]; then
+            mkdir -p model/adapters/chart
+            aws s3 cp "$CHART_ART" chart.tar.gz && tar -xzf chart.tar.gz -C model/adapters/chart
+          fi
+          cp ../ML/src/model_a/inference.py ../ML/src/model_a/guardrail.py model/code/
+          cp ../ML/src/common/__init__.py ../ML/src/common/prompts.py model/code/common/
+          cp ../ML/src/model_a/inference_requirements.txt model/code/requirements.txt
+          tar -czf deploy.tar.gz -C model .
+          DEPLOY_URI="s3://${ARTIFACTS_BUCKET}/deploy/${DEPLOY_ID}/model.tar.gz"
+          aws s3 cp deploy.tar.gz "$DEPLOY_URI"
+          echo "DEPLOY_URI=$DEPLOY_URI" >> "$GITHUB_ENV"
+          echo "Packaged -> $DEPLOY_URI"
+
+      - name: Terraform apply (module.inference)
+        if: inputs.endpoint_action == 'deploy'
+        run: |
+          # -var outranks terraform.tfvars, which still ships the dummy-model defaults.
+          terraform apply -auto-approve -target=module.inference_v3 -target=module.inference_watchdog \
+            -var "inference_artifact_s3_uri=${DEPLOY_URI}" \
+            -var "inference_deployment_id=${DEPLOY_ID}" \
+            -var "inference_instance_types=${{ inputs.inference_instance_types }}" \
+            -var "inference_image=${INFERENCE_IMAGE}" \
+            -var "inference_quant_cache_s3_uri=s3://${ARTIFACTS_BUCKET}/quantized-base" \
+            -var "inference_model_type=qlora"
+
+      - name: Wait for the endpoint, then ask it a question
+        if: inputs.endpoint_action == 'deploy'
+        run: |
+          echo "Waiting for InService (the container downloads the base model first; 7B ~5-10 min, 27B longer)..."
+          if ! aws sagemaker wait endpoint-in-service --endpoint-name "$ENDPOINT_NAME"; then
+            aws sagemaker describe-endpoint --endpoint-name "$ENDPOINT_NAME" --query '[EndpointStatus,FailureReason]' --output text
+            echo "Logs: /aws/sagemaker/Endpoints/$ENDPOINT_NAME" >&2
+            exit 1
+          fi
+          # The endpoint being InService says nothing about the model: the
+          # inference component's copy is what has to come up.
+          # A redeploy that finds the component scaled to zero leaves it there
+          # (its copy count is not Terraform's), and the test question below
+          # would be refused until the wake alarm fires minutes later. Ask for
+          # the copy ourselves, like the backend does.
+          DESIRED=$(aws sagemaker describe-inference-component --inference-component-name "$IC_NAME" \
+                      --query 'RuntimeConfig.DesiredCopyCount' --output text)
+          if [ "$DESIRED" = "0" ]; then
+            echo "component is at 0 copies; asking for one"
+            aws sagemaker update-inference-component-runtime-config \
+              --inference-component-name "$IC_NAME" --desired-runtime-config CopyCount=1 || true
+          fi
+          for i in $(seq 1 90); do
+            IC=$(aws sagemaker describe-inference-component --inference-component-name "$IC_NAME" \
+                   --query '[InferenceComponentStatus,RuntimeConfig.CurrentCopyCount,FailureReason]' --output text)
+            echo "inference component: $IC"
+            # InService with no copy is the scaled-to-zero state, not a model that is up.
+            case "$IC" in InService*[[:space:]]0[[:space:]]*) ;; InService*) break ;; Failed*) echo "Logs: /aws/sagemaker/InferenceComponents/$IC_NAME" >&2; exit 1 ;; esac
+            sleep 20
+          done
+          cat > req.json <<'EOF'
+          {"schema": "CREATE TABLE singer (singer_id INT PRIMARY KEY, name TEXT, country TEXT, age INT);", "question": "How many singers are from France?"}
+          EOF
+          # InService only means the HTTP server is up: the handler's model_fn runs
+          # (base-model download + 4-bit load, ~7 min for the 27B) while the first
+          # requests are already arriving, and a real-time invocation is cut off at
+          # 60 s. So retry until a call succeeds instead of failing on the first.
+          OK=0
+          for i in $(seq 1 30); do
+            if aws sagemaker-runtime invoke-endpoint --endpoint-name "$ENDPOINT_NAME" \
+                 --inference-component-name "$IC_NAME" \
+                 --content-type application/json --accept application/json \
+                 --cli-read-timeout 70 --body fileb://req.json out.json >/dev/null 2>err.txt; then
+              OK=1; break
+            fi
+            echo "attempt $i: not ready yet ($(tail -c 160 err.txt | tr '\n' ' '))"
+            sleep 20
+          done
+          if [ "$OK" != "1" ]; then
+            echo "Endpoint never answered. Logs: /aws/sagemaker/Endpoints/$ENDPOINT_NAME" >&2
+            exit 1
+          fi
+          echo "Response:"; cat out.json; echo
+          if [ -n "$CHART_JOB" ]; then
+            cat > chart_req.json <<'EOF'
+          {"task": "chart", "question": "Show revenue by month", "row_count": 12, "columns": [{"name": "month", "dtype": "temporal", "cardinality": 12}, {"name": "revenue", "dtype": "quantitative", "cardinality": 12}], "rows": [{"month": "2024-01-01", "revenue": 120}, {"month": "2024-02-01", "revenue": 135}]}
+          EOF
+            aws sagemaker-runtime invoke-endpoint --endpoint-name "$ENDPOINT_NAME" \
+              --inference-component-name "$IC_NAME" \
+              --content-type application/json --accept application/json \
+              --cli-read-timeout 70 --body fileb://chart_req.json chart_out.json >/dev/null
+            echo "Chart response:"; cat chart_out.json; echo
+          fi
+          {
+            echo ""
+            echo "### Endpoint \`$ENDPOINT_NAME\` is serving sql=\`$JOB\` chart=\`${CHART_JOB:-none}\`"
+            echo "Test response: \`$(cat out.json)\`"
+            echo ""
+            echo "It bills (~\$1.5-1.9/hr, depending on the instance type it got) while its copy is up, and scales to zero after ~15 idle minutes."
+            echo "Backend: ALIBI_SAGEMAKER_ENDPOINT_NAME=\`$ENDPOINT_NAME\`, ALIBI_SAGEMAKER_INFERENCE_COMPONENT=\`$IC_NAME\`."
+            echo "Remove it entirely with ml-destroy.yml (destroy_inference)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Show outputs
+        run: |
+          terraform output artifacts_bucket || true
+          terraform output datasets_bucket || true
+          terraform output endpoint_name || true
+          terraform output inference_component_name || true
